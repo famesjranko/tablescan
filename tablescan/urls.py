@@ -10,7 +10,7 @@ from django.contrib import admin
 from django.contrib.auth.views import LogoutView
 from django.urls import path
 from django.conf.urls.static import static
-from django.conf.urls import url, include
+from django.urls import re_path, include
 from django.conf import settings
 from django.views.generic import TemplateView
 
@@ -31,7 +31,7 @@ urlpatterns = [
     path("admin/", admin.site.urls),
 
     # API endpoints (existing)
-    url(r"^api/", include("api.urls")),
+    re_path(r"^api/", include("api.urls")),
 
     # Authentication pages (frontend)
     path("auth/login/", TemplateView.as_view(template_name="auth/login.html"), name="auth_login_page"),

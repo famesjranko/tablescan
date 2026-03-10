@@ -25,3 +25,39 @@ Started: March 2026
 
 ---
 
+## US-001: Add PyMuPDF dependency (DONE)
+- Added pymupdf>=1.23.0 to requirements.txt
+- Verified installation: `import fitz` works, version 1.27.1
+- PyMuPDF provides the `fitz` module for PDF analysis and page classification
+
+## US-002: Create PageClassifier class (DONE)
+- Created api/scripts/page_classifier.py
+- PageClassifier class with classify(pdf_path, page_num) method
+- Returns PageClassification dataclass with: type, text_coverage, has_images
+- Uses PyMuPDF (fitz) to extract text blocks and calculate coverage ratio
+- Thresholds per PRD: born_digital >90%, scanned <10%, mixed 10-90%
+- Performance: ~6ms per page (well under 100ms requirement)
+- Error handling for invalid page numbers
+
+## US-014: Route scanned pages to vision extractor (DONE)
+- Updated process_page_with_routing() in table_extract.py to route scanned pages to VisionExtractor
+- Added extract_tables_vision() function in predict_table.py for vision-based extraction
+- Feature flags loaded from docs/prd.json: use_vision_detector, legacy_yolo_enabled
+- Scanned pages: try VisionExtractor first, fallback to YOLO if it fails or finds no tables
+- Mixed pages: try VisionExtractor first, then YOLO fallback (or direct extraction if YOLO disabled)
+- Vision extraction uses ExtractionScorer for consistent quality scoring with born-digital
+- Graceful fallback: if VisionExtractor fails, logs warning and falls back to YOLO (if enabled)
+- YOLO can be bypassed entirely by setting legacy_yolo_enabled=false
+- All 116 tests pass (33 new tests for vision routing)
+
+## US-016: Add rich fields to Extracted model (DONE)
+- Added 5 new fields to Extracted model in api/models.py:
+  - page_type: CharField(max_length=20) for born_digital/scanned/mixed
+  - extraction_method: CharField(max_length=50) for camelot-lattice, pdfplumber, etc
+  - confidence_score: FloatField for 0.0-1.0 scores
+  - structure_json: JSONField for rich cell-level data with spans
+  - bounding_box: JSONField for {x0, y0, x1, y1} coordinates
+- All fields are nullable (null=True, blank=True) for backwards compatibility
+- Created migration 0005_add_rich_fields_to_extracted.py
+- Migration applied successfully - existing records unaffected
+

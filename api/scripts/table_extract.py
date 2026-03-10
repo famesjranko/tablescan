@@ -44,13 +44,27 @@ import multiprocessing as mp
 
 from pathlib import Path, PurePath
 from tabulate import tabulate
-from PyPDF2 import PdfFileReader
+from PyPDF2 import PdfReader
 
 from api.scripts.logging import Logging
 from api.models import Report
-from api.scripts.YOLOV3.predict_table import detect_tables, extract_tables_direct, extract_tables_vision
 from api.scripts.page_classifier import PageClassifier
 from api.scripts.extractors import VisionExtractor, ExtractionScorer
+
+# Lazy imports for YOLO (requires torch) - only loaded when needed
+_yolo_imports = None
+
+def _get_yolo_functions():
+    """Lazy load YOLO functions to avoid importing torch at module load."""
+    global _yolo_imports
+    if _yolo_imports is None:
+        from api.scripts.YOLOV3.predict_table import detect_tables, extract_tables_direct, extract_tables_vision
+        _yolo_imports = {
+            'detect_tables': detect_tables,
+            'extract_tables_direct': extract_tables_direct,
+            'extract_tables_vision': extract_tables_vision,
+        }
+    return _yolo_imports
 
 
 # Feature flags - loaded from docs/prd.json if available
@@ -146,7 +160,8 @@ def process_page_with_routing(
     if classification.type == 'born_digital':
         # Skip YOLO detection and JPG conversion for born-digital pages
         log.output('INFO', f'Page {page_num}: Using direct multi-extractor (born-digital)')
-        return extract_tables_direct(
+        yolo = _get_yolo_functions()
+        return yolo['extract_tables_direct'](
             file_path, page_num, output_type, report_db, extract_dir,
             flavor, row_tol, strip_text, merge_headers,
             page_type=classification.type
@@ -157,7 +172,8 @@ def process_page_with_routing(
         if use_vision:
             log.output('INFO', f'Page {page_num}: Using VisionExtractor (scanned)')
             try:
-                result = extract_tables_vision(
+                yolo = _get_yolo_functions()
+                result = yolo['extract_tables_vision'](
                     file_path, page_num, output_type, report_db, extract_dir,
                     flavor, row_tol, strip_text, merge_headers,
                     page_type=classification.type
@@ -173,7 +189,8 @@ def process_page_with_routing(
             # Graceful fallback to YOLO if VisionExtractor fails or finds nothing
             if legacy_yolo:
                 log.output('INFO', f'Page {page_num}: Falling back to YOLO pipeline')
-                return detect_tables(
+                yolo = _get_yolo_functions()
+                return yolo['detect_tables'](
                     file_path, page_num, output_type, report_db, extract_dir,
                     flavor, row_tol, strip_text, merge_headers,
                     page_type=classification.type
@@ -185,7 +202,8 @@ def process_page_with_routing(
             # VisionExtractor disabled, use YOLO directly
             if legacy_yolo:
                 log.output('INFO', f'Page {page_num}: Using YOLO pipeline (scanned, vision disabled)')
-                return detect_tables(
+                yolo = _get_yolo_functions()
+                return yolo['detect_tables'](
                     file_path, page_num, output_type, report_db, extract_dir,
                     flavor, row_tol, strip_text, merge_headers,
                     page_type=classification.type
@@ -199,7 +217,8 @@ def process_page_with_routing(
         if use_vision:
             log.output('INFO', f'Page {page_num}: Trying VisionExtractor (mixed)')
             try:
-                result = extract_tables_vision(
+                yolo = _get_yolo_functions()
+                result = yolo['extract_tables_vision'](
                     file_path, page_num, output_type, report_db, extract_dir,
                     flavor, row_tol, strip_text, merge_headers,
                     page_type=classification.type
@@ -213,7 +232,8 @@ def process_page_with_routing(
         # Fallback to YOLO for mixed pages
         if legacy_yolo:
             log.output('INFO', f'Page {page_num}: Using YOLO pipeline (mixed)')
-            return detect_tables(
+            yolo = _get_yolo_functions()
+            return yolo['detect_tables'](
                 file_path, page_num, output_type, report_db, extract_dir,
                 flavor, row_tol, strip_text, merge_headers,
                 page_type=classification.type
@@ -221,7 +241,8 @@ def process_page_with_routing(
         else:
             # Try direct extraction as last resort for mixed pages
             log.output('INFO', f'Page {page_num}: Trying direct extraction (mixed, YOLO disabled)')
-            return extract_tables_direct(
+            yolo = _get_yolo_functions()
+            return yolo['extract_tables_direct'](
                 file_path, page_num, output_type, report_db, extract_dir,
                 flavor, row_tol, strip_text, merge_headers,
                 page_type=classification.type
@@ -287,8 +308,8 @@ def get_num_pages(path: str) -> int:
     """
     
     with open(path, "rb") as f:
-        pdf = PdfFileReader(f)
-        return pdf.getNumPages()
+        pdf = PdfReader(f)
+        return len(pdf.pages)
 
 
 def end_of_range(start_page: int, end_page: int, total_pages: int) -> int:

@@ -13,7 +13,7 @@
         "pip install -r requirements.txt succeeds",
         "python -c 'import fitz; print(fitz.version)' works"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "US-002",
@@ -27,7 +27,7 @@
         "Uses PyMuPDF to extract text blocks and calculate coverage ratio",
         "Classification completes in <100ms per page"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "US-003",
@@ -41,7 +41,7 @@
         "Tests performance requirement (<100ms)",
         "All tests pass with pytest"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "US-004",
@@ -55,7 +55,7 @@
         "Scanned pages continue through existing YOLO pipeline",
         "Page type logged for each page processed"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "US-005",
@@ -68,7 +68,7 @@
         "Upload works through both sync and async endpoints",
         "No regressions on existing functionality"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "US-006",
@@ -82,7 +82,7 @@
         "ExtractionResult dataclass with dataframe, confidence, method, metadata fields",
         "BaseExtractor has abstract extract() and name() methods"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "US-007",
@@ -96,7 +96,7 @@
         "Returns confidence from Camelot parsing report",
         "Works standalone: can extract tables from a PDF page"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "US-008",
@@ -110,7 +110,7 @@
         "Can extract tables from a PDF page",
         "Returns confidence score based on table detection quality"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "US-009",
@@ -124,7 +124,7 @@
         "select_best() method returns highest-scoring ExtractionResult",
         "Scores are normalized 0-1"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "US-010",
@@ -138,7 +138,7 @@
         "Falls back gracefully if one extractor fails",
         "Existing API responses unchanged (backwards compatible)"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "US-011",
@@ -152,7 +152,7 @@
         "Tests ExtractionScorer scoring and selection",
         "All tests pass with pytest"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "US-012",
@@ -165,7 +165,7 @@
         "Accuracy same or better than single-extractor",
         "No performance regression (parallel extraction if needed)"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "US-013",
@@ -179,7 +179,7 @@
         "Can detect and extract tables from image-based PDF pages",
         "Works on CPU (no GPU required)"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "US-014",
@@ -192,7 +192,7 @@
         "Extraction results scored and selected same as born-digital",
         "Graceful fallback to YOLO if VisionExtractor fails"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "US-015",
@@ -205,7 +205,7 @@
         "Quality comparable to or better than YOLO pipeline",
         "Feature flag can disable YOLO entirely"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "US-016",
@@ -218,7 +218,7 @@
         "makemigrations and migrate succeed",
         "Existing data unaffected"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "US-017",
@@ -232,7 +232,7 @@
         "structure_json contains cell-level data with spans if detected",
         "bounding_box saved from detection"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "US-018",
@@ -246,7 +246,7 @@
         "Header rows formatted distinctly",
         "Extracted model updated to include xlsx file reference"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "US-019",
@@ -259,7 +259,7 @@
         "Backwards compatible - new fields are additive",
         "API documentation updated if exists"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "US-020",
@@ -272,13 +272,13 @@
         "API returns confidence scores",
         "All existing tests still pass"
       ],
-      "passes": false
+      "passes": true
     }
   ],
   "featureFlags": {
-    "use_page_classifier": false,
-    "use_multi_extractor": false,
-    "use_vision_detector": false,
+    "use_page_classifier": true,
+    "use_multi_extractor": true,
+    "use_vision_detector": true,
     "use_rich_schema": false,
     "legacy_yolo_enabled": true
   }

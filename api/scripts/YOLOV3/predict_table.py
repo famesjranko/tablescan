@@ -49,7 +49,7 @@ import matplotlib.image as mpimg
 
 # from subprocess import check_output
 
-from PyPDF2 import PdfFileWriter, PdfFileReader
+from PyPDF2 import PdfWriter, PdfReader
 from pdf2image import convert_from_path, convert_from_bytes
 from api.scripts.YOLOV3.utils.detect_func import detectTable, parameters
 from api.scripts.table_detector import detect_table_type_from_array
@@ -119,10 +119,10 @@ def build_structure_json(df, metadata: dict = None) -> dict:
 
 # %%
 def norm_pdf_page(pdf_file, pg):
-    pdf_doc = PdfFileReader(open(pdf_file, "rb"), strict=False)
-    pdf_page = pdf_doc.getPage(pg - 1)
-    pdf_page.cropBox.upperLeft = (0, list(pdf_page.mediaBox)[-1])
-    pdf_page.cropBox.lowerRight = (list(pdf_page.mediaBox)[-2], 0)
+    pdf_doc = PdfReader(open(pdf_file, "rb"))
+    pdf_page = pdf_doc.pages[pg - 1]
+    pdf_page.cropbox.upper_left = (0, list(pdf_page.mediabox)[-1])
+    pdf_page.cropbox.lower_right = (list(pdf_page.mediabox)[-2], 0)
 
     return pdf_page
 
@@ -197,10 +197,10 @@ def bboxes_pdf(img, pdf_page, bbox, save_cropped=False):
 
     if save_cropped:
         page = copy.copy(pdf_page)
-        page.cropBox.upperLeft = (x1, y1)
-        page.cropBox.lowerRight = (x2, y2)
-        output = PdfFileWriter()
-        output.addPage(page)
+        page.cropbox.upper_left = (x1, y1)
+        page.cropbox.lower_right = (x2, y2)
+        output = PdfWriter()
+        output.add_page(page)
 
         with open("cropped_" + pdf_file[:-4] + "-" + str(pg) + ".pdf", "wb") as out_f:
             output.write(out_f)

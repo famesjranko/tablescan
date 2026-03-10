@@ -18,7 +18,7 @@ from .views_auth import RegisterView, LoginView, LogoutView
 
 from rest_framework_simplejwt.views import TokenRefreshView
 
-from django.conf.urls import url
+from django.urls import re_path
 from django.conf.urls.static import static
 from django.conf import settings
 
@@ -40,7 +40,7 @@ auth_urlpatterns = [
 api_urlpatterns = [
     path("", include(router.urls)),
     path("auth/", include(auth_urlpatterns)),
-    url(r"^upload/$", UploadView.as_view(), name="api_upload"),
+    re_path(r"^upload/$", UploadView.as_view(), name="api_upload"),
 ]
 
 # For backwards compatibility, also export as urlpatterns
