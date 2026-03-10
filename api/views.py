@@ -21,11 +21,16 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework import viewsets
 from rest_framework import status
+from rest_framework.permissions import IsAuthenticated
 
 from django_filters.rest_framework import DjangoFilterBackend
 
+from .permissions import IsReportOwner
+
 from django.http import HttpResponse
 from django.conf import settings
+
+from .throttles import UploadRateThrottle, BurstRateThrottle
 
 from .serializers import *
 from .models import Extracted, Report
@@ -41,6 +46,28 @@ from timeit import default_timer as timer
 from humanfriendly import format_timespan
 
 from rest_framework.renderers import JSONRenderer
+
+
+def validate_pdf_file(document):
+    """
+    Validate uploaded file is a valid PDF.
+    Returns (is_valid, error_message) tuple.
+    """
+    # Check file size
+    max_size = getattr(settings, 'MAX_UPLOAD_SIZE', 50 * 1024 * 1024)  # Default 50MB
+    if document.size > max_size:
+        max_mb = max_size // (1024 * 1024)
+        return False, f'File size exceeds maximum allowed size of {max_mb}MB'
+
+    # Check PDF magic number (first 5 bytes should be %PDF-)
+    document.seek(0)
+    header = document.read(5)
+    document.seek(0)  # Reset file pointer for further processing
+
+    if header != b'%PDF-':
+        return False, 'Invalid PDF file: file does not have a valid PDF header'
+
+    return True, None
 
 
 class ReportViewSet(viewsets.ModelViewSet):
@@ -61,6 +88,10 @@ class ReportViewSet(viewsets.ModelViewSet):
     serializer_class = ReportSerializer
     filter_backends = [DjangoFilterBackend]
     filterset_fields = ["id", "name"]  # test set attributes to filter by
+    permission_classes = [IsAuthenticated, IsReportOwner]
+
+    def get_queryset(self):
+        return Report.objects.filter(owner=self.request.user)
 
 
 class ExtractedViewSet(viewsets.ModelViewSet):
@@ -79,6 +110,10 @@ class ExtractedViewSet(viewsets.ModelViewSet):
     serializer_class = ExtractedSerializer
     filter_backends = [DjangoFilterBackend]
     filterset_fields = ["id", "f_type"]  # test set attributes to filter by
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return Extracted.objects.filter(report__owner=self.request.user)
 
 
 class UploadView(APIView):
@@ -88,8 +123,27 @@ class UploadView(APIView):
     """
 
     parser_classes = (MultiPartParser, FormParser)
+    throttle_classes = [UploadRateThrottle, BurstRateThrottle]
+    permission_classes = [IsAuthenticated]
 
     def post(self, request, *args, **kwargs):
+        # Validate file exists
+        if 'document' not in request.FILES:
+            return Response(
+                {'error': 'No file uploaded'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        document = request.FILES['document']
+
+        # Validate PDF file (size and magic number)
+        is_valid, error_message = validate_pdf_file(document)
+        if not is_valid:
+            return Response(
+                {'error': error_message},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
         report_serializer = ReportSerializer(
             data=request.data, context={"request": request}
         )
@@ -101,8 +155,8 @@ class UploadView(APIView):
         # create log object
         log = Logging()
 
-        # create Report database model instance
-        report_serializer.save()
+        # create Report database model instance with owner
+        report_serializer.save(owner=request.user)
 
         # uploaded file url location
         file_url = report_serializer.data["document"]
@@ -167,6 +221,7 @@ from django.shortcuts import render, redirect, get_object_or_404
 from django.views.generic import ListView, DetailView, View
 from django.http import JsonResponse, FileResponse
 from django.contrib import messages
+from django.contrib.auth.mixins import LoginRequiredMixin
 from collections import defaultdict
 import csv
 import json
@@ -176,17 +231,17 @@ import io
 from celery.result import AsyncResult
 
 
-class HomeView(View):
+class HomeView(LoginRequiredMixin, View):
     """Upload page - main entry point for the frontend"""
 
     def get(self, request):
-        recent_reports = Report.objects.order_by('-id')[:5]
+        recent_reports = Report.objects.filter(owner=request.user).order_by('-id')[:5]
         return render(request, 'upload.html', {
             'recent_reports': recent_reports
         })
 
 
-class ReportsListView(ListView):
+class ReportsListView(LoginRequiredMixin, ListView):
     """List all reports with search and pagination"""
     model = Report
     template_name = 'reports/list.html'
@@ -194,7 +249,7 @@ class ReportsListView(ListView):
     paginate_by = 12
 
     def get_queryset(self):
-        queryset = Report.objects.all().order_by('-id')
+        queryset = Report.objects.filter(owner=self.request.user).order_by('-id')
         search = self.request.GET.get('search', '')
         if search:
             queryset = queryset.filter(name__icontains=search)
@@ -209,11 +264,14 @@ class ReportsListView(ListView):
         return context
 
 
-class ReportDetailView(DetailView):
+class ReportDetailView(LoginRequiredMixin, DetailView):
     """Report detail page with table previews"""
     model = Report
     template_name = 'reports/detail.html'
     context_object_name = 'report'
+
+    def get_queryset(self):
+        return Report.objects.filter(owner=self.request.user)
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -324,19 +382,44 @@ class DownloadAllCSVView(View):
         return response
 
 
-class UploadAsyncView(View):
+class UploadAsyncView(LoginRequiredMixin, View):
     """Async upload endpoint that queues extraction via Celery"""
 
     def post(self, request):
         from api.tasks import extract_tables_task
 
-        # Validate file
+        # Apply rate limiting
+        upload_throttle = UploadRateThrottle()
+        burst_throttle = BurstRateThrottle()
+
+        # Check upload rate limit
+        if not upload_throttle.allow_request(request, self):
+            wait_time = upload_throttle.wait()
+            return JsonResponse({
+                'error': f'Upload rate limit exceeded. Try again in {int(wait_time)} seconds.'
+            }, status=429)
+
+        # Check burst rate limit
+        if not burst_throttle.allow_request(request, self):
+            wait_time = burst_throttle.wait()
+            return JsonResponse({
+                'error': f'Too many requests. Try again in {int(wait_time)} seconds.'
+            }, status=429)
+
+        # Validate file exists
         if 'document' not in request.FILES:
             return JsonResponse({'error': 'No file uploaded'}, status=400)
 
         document = request.FILES['document']
+
+        # Validate file extension
         if not document.name.lower().endswith('.pdf'):
             return JsonResponse({'error': 'Only PDF files are supported'}, status=400)
+
+        # Validate PDF file (size and magic number)
+        is_valid, error_message = validate_pdf_file(document)
+        if not is_valid:
+            return JsonResponse({'error': error_message}, status=400)
 
         # Get page range
         start_page = int(request.POST.get('start_page', 1))
@@ -361,7 +444,7 @@ class UploadAsyncView(View):
         if not report_serializer.is_valid():
             return JsonResponse({'error': 'Invalid data'}, status=400)
 
-        report_serializer.save()
+        report_serializer.save(owner=request.user)
 
         # Get the saved report
         file_url = report_serializer.data['document']

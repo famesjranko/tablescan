@@ -332,23 +332,28 @@ def extract(file_path: str, start_page: int, end_page: int,
         log.output("WARNING", "database object already exists!")
 
         # get report database for previous upload of this file, get document.name and delete
-        original_report_db = Report.objects.get(document__endswith=original_file_name)
-        original_name = original_report_db.document.name
-        original_report_db.delete()
+        try:
+            original_report_db = Report.objects.get(document__endswith=original_file_name)
+            original_name = original_report_db.document.name
+            original_report_db.delete()
 
-        # rename file path for first upload version
-        Path(report_db.document.path).rename(original_file_path)
+            # rename file path for first upload version
+            Path(report_db.document.path).rename(original_file_path)
 
-        # change the document name to first upload's version
-        report_db.document.name = original_name
+            # change the document name to first upload's version
+            report_db.document.name = original_name
 
-        # update report with changes
-        report_db.save()
+            # update report with changes
+            report_db.save()
 
-        # change extraction path to first upload path
-        file_path = original_file_path
+            # change extraction path to first upload path
+            file_path = original_file_path
 
-        log.output("INFO", f"updated database object: {report_db.name}")
+            log.output("INFO", f"updated database object: {report_db.name}")
+        except Report.DoesNotExist:
+            # File exists on disk but no database record - just delete the orphan file
+            log.output("WARNING", "orphan file found on disk with no database record, removing")
+            Path(original_file_path).unlink(missing_ok=True)
 
     # get total number of pages for pdf
     total_pages = get_num_pages(file_path)

@@ -62,6 +62,13 @@
                        class="px-3 py-2 rounded-md text-sm font-medium text-gray-600 hover:text-gray-900 hover:bg-gray-50">
                         Admin
                     </a>
+                    {% if user.is_authenticated %}
+                    <span class="text-sm text-gray-500">{{ user.username }}</span>
+                    <a href="{% url 'logout_page' %}"
+                       class="px-3 py-2 rounded-md text-sm font-medium text-gray-600 hover:text-gray-900 hover:bg-gray-50">
+                        Logout
+                    </a>
+                    {% endif %}
                 </div>
                 <!-- Mobile menu button -->
                 <div class="sm:hidden flex items-center">
@@ -91,6 +98,15 @@
                    class="block px-3 py-2 rounded-md text-base font-medium text-gray-600 hover:text-gray-900 hover:bg-gray-50">
                     Admin
                 </a>
+                {% if user.is_authenticated %}
+                <div class="border-t border-gray-200 pt-2 mt-2">
+                    <span class="block px-3 py-2 text-sm text-gray-500">{{ user.username }}</span>
+                    <a href="{% url 'logout_page' %}"
+                       class="block px-3 py-2 rounded-md text-base font-medium text-gray-600 hover:text-gray-900 hover:bg-gray-50">
+                        Logout
+                    </a>
+                </div>
+                {% endif %}
             </div>
         </div>
     </nav>

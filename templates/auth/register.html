@@ -1,0 +1,232 @@
+{% extends 'base.html' %}
+
+{% block title %}Register - TableScan{% endblock %}
+
+{% block content %}
+<div class="max-w-md mx-auto">
+    <div class="text-center mb-8">
+        <h1 class="text-3xl font-bold text-gray-900">Create Account</h1>
+        <p class="mt-2 text-gray-600">Sign up to start extracting tables from PDFs</p>
+    </div>
+
+    <div x-data="registerForm()" class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+        <form @submit.prevent="submitForm">
+            {% csrf_token %}
+
+            <!-- Username Field -->
+            <div class="mb-4">
+                <label for="username" class="block text-sm font-medium text-gray-700 mb-1">Username</label>
+                <input
+                    type="text"
+                    id="username"
+                    name="username"
+                    x-model="username"
+                    required
+                    class="w-full rounded-md border-gray-300 shadow-sm focus:border-primary focus:ring-primary sm:text-sm border px-3 py-2"
+                    placeholder="Choose a username"
+                >
+                <p x-show="errors.username" x-text="errors.username" class="mt-1 text-sm text-red-600"></p>
+            </div>
+
+            <!-- Email Field -->
+            <div class="mb-4">
+                <label for="email" class="block text-sm font-medium text-gray-700 mb-1">Email</label>
+                <input
+                    type="email"
+                    id="email"
+                    name="email"
+                    x-model="email"
+                    required
+                    class="w-full rounded-md border-gray-300 shadow-sm focus:border-primary focus:ring-primary sm:text-sm border px-3 py-2"
+                    placeholder="Enter your email"
+                >
+                <p x-show="errors.email" x-text="errors.email" class="mt-1 text-sm text-red-600"></p>
+            </div>
+
+            <!-- Password Field -->
+            <div class="mb-4">
+                <label for="password" class="block text-sm font-medium text-gray-700 mb-1">Password</label>
+                <input
+                    type="password"
+                    id="password"
+                    name="password"
+                    x-model="password"
+                    required
+                    class="w-full rounded-md border-gray-300 shadow-sm focus:border-primary focus:ring-primary sm:text-sm border px-3 py-2"
+                    placeholder="Create a password"
+                >
+                <p x-show="errors.password" x-text="errors.password" class="mt-1 text-sm text-red-600"></p>
+                <p class="mt-1 text-xs text-gray-500">Must be at least 8 characters</p>
+            </div>
+
+            <!-- Confirm Password Field -->
+            <div class="mb-6">
+                <label for="password_confirm" class="block text-sm font-medium text-gray-700 mb-1">Confirm Password</label>
+                <input
+                    type="password"
+                    id="password_confirm"
+                    name="password_confirm"
+                    x-model="passwordConfirm"
+                    required
+                    class="w-full rounded-md border-gray-300 shadow-sm focus:border-primary focus:ring-primary sm:text-sm border px-3 py-2"
+                    placeholder="Confirm your password"
+                >
+                <p x-show="errors.password_confirm" x-text="errors.password_confirm" class="mt-1 text-sm text-red-600"></p>
+            </div>
+
+            <!-- General Error Message -->
+            <div x-show="generalError" x-cloak class="mb-4 bg-red-50 border border-red-200 rounded-md p-3">
+                <div class="flex">
+                    <svg class="h-5 w-5 text-red-400" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"/>
+                    </svg>
+                    <p class="ml-3 text-sm text-red-700" x-text="generalError"></p>
+                </div>
+            </div>
+
+            <!-- Success Message -->
+            <div x-show="successMessage" x-cloak class="mb-4 bg-green-50 border border-green-200 rounded-md p-3">
+                <div class="flex">
+                    <svg class="h-5 w-5 text-green-400" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
+                    </svg>
+                    <p class="ml-3 text-sm text-green-700" x-text="successMessage"></p>
+                </div>
+            </div>
+
+            <!-- Submit Button -->
+            <button
+                type="submit"
+                :disabled="isLoading || !isFormValid()"
+                :class="isLoading || !isFormValid() ? 'bg-gray-300 cursor-not-allowed' : 'bg-primary hover:bg-blue-600'"
+                class="w-full flex justify-center items-center py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary transition-colors"
+            >
+                <template x-if="!isLoading">
+                    <span>Create Account</span>
+                </template>
+                <template x-if="isLoading">
+                    <span class="flex items-center">
+                        <svg class="animate-spin -ml-1 mr-3 h-5 w-5 text-white" fill="none" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        Creating account...
+                    </span>
+                </template>
+            </button>
+        </form>
+
+        <!-- Login Link -->
+        <div class="mt-6 text-center">
+            <p class="text-sm text-gray-600">
+                Already have an account?
+                <a href="{% url 'auth_login_page' %}" class="font-medium text-primary hover:text-blue-500">
+                    Sign in here
+                </a>
+            </p>
+        </div>
+    </div>
+</div>
+
+<script>
+function registerForm() {
+    return {
+        username: '',
+        email: '',
+        password: '',
+        passwordConfirm: '',
+        isLoading: false,
+        generalError: null,
+        successMessage: null,
+        errors: {
+            username: null,
+            email: null,
+            password: null,
+            password_confirm: null
+        },
+
+        isFormValid() {
+            return this.username && this.email && this.password && this.passwordConfirm;
+        },
+
+        clearErrors() {
+            this.generalError = null;
+            this.errors = {
+                username: null,
+                email: null,
+                password: null,
+                password_confirm: null
+            };
+        },
+
+        async submitForm() {
+            this.isLoading = true;
+            this.clearErrors();
+            this.successMessage = null;
+
+            // Client-side validation
+            if (this.password !== this.passwordConfirm) {
+                this.errors.password_confirm = 'Passwords do not match.';
+                this.isLoading = false;
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/auth/register/', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': '{{ csrf_token }}'
+                    },
+                    body: JSON.stringify({
+                        username: this.username,
+                        email: this.email,
+                        password: this.password,
+                        password_confirm: this.passwordConfirm
+                    })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    // Store tokens in localStorage
+                    localStorage.setItem('access_token', data.tokens.access);
+                    localStorage.setItem('refresh_token', data.tokens.refresh);
+
+                    this.successMessage = 'Account created successfully! Redirecting...';
+
+                    // Redirect to home page
+                    setTimeout(() => {
+                        window.location.href = '/';
+                    }, 1500);
+                } else {
+                    // Handle field-specific errors
+                    if (data.username) {
+                        this.errors.username = Array.isArray(data.username) ? data.username[0] : data.username;
+                    }
+                    if (data.email) {
+                        this.errors.email = Array.isArray(data.email) ? data.email[0] : data.email;
+                    }
+                    if (data.password) {
+                        this.errors.password = Array.isArray(data.password) ? data.password[0] : data.password;
+                    }
+                    if (data.password_confirm) {
+                        this.errors.password_confirm = Array.isArray(data.password_confirm) ? data.password_confirm[0] : data.password_confirm;
+                    }
+                    if (data.non_field_errors) {
+                        this.generalError = Array.isArray(data.non_field_errors) ? data.non_field_errors[0] : data.non_field_errors;
+                    }
+                    if (data.detail) {
+                        this.generalError = data.detail;
+                    }
+                }
+            } catch (error) {
+                this.generalError = 'Network error. Please try again.';
+            } finally {
+                this.isLoading = false;
+            }
+        }
+    }
+}
+</script>
+{% endblock %}

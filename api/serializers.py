@@ -75,6 +75,9 @@ class ReportSerializer(serializers.ModelSerializer):
     # link Report to it's connected Extracted model
     extracted = ExtractedSerializer2(read_only=True, many=True)
 
+    # Expose the owner's username as a read-only field
+    owner = serializers.ReadOnlyField(source='owner.username')
+
     class Meta:
         model = Report
         fields = (
@@ -87,4 +90,5 @@ class ReportSerializer(serializers.ModelSerializer):
             "start_page",
             "end_page",
             "extracted",
+            "owner",
         )

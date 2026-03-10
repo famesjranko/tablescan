@@ -50,3 +50,12 @@ redis>=4.0.0
 
 # Django extensions
 django-htmx>=1.12.0
+
+# JWT Authentication
+djangorestframework-simplejwt>=5.2.0
+
+# PostgreSQL support
+psycopg2-binary>=2.9.0
+
+# Environment configuration
+python-decouple>=3.6

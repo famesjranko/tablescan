@@ -15,6 +15,7 @@ Referenced by:
 import os
 from django.db import models
 from django.db.models.deletion import SET_DEFAULT
+from django.contrib.auth.models import User
 
 from django.utils.encoding import force_text
 import re
@@ -83,6 +84,13 @@ class Report(models.Model):
     total_pages = models.PositiveIntegerField(null=True, blank=True)
     start_page = models.IntegerField(default=1)
     end_page = models.IntegerField(default=-1)
+    owner = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name='reports'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     # returns file name without .extension
     def filename(self):

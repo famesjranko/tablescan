@@ -7,10 +7,12 @@ urls.py
 """
 
 from django.contrib import admin
+from django.contrib.auth.views import LogoutView
 from django.urls import path
 from django.conf.urls.static import static
 from django.conf.urls import url, include
 from django.conf import settings
+from django.views.generic import TemplateView
 
 from api.views import (
     HomeView,
@@ -30,6 +32,11 @@ urlpatterns = [
 
     # API endpoints (existing)
     url(r"^api/", include("api.urls")),
+
+    # Authentication pages (frontend)
+    path("auth/login/", TemplateView.as_view(template_name="auth/login.html"), name="auth_login_page"),
+    path("auth/register/", TemplateView.as_view(template_name="auth/register.html"), name="auth_register_page"),
+    path("auth/logout/", LogoutView.as_view(next_page='/auth/login/'), name="logout_page"),
 
     # Frontend pages
     path("", HomeView.as_view(), name="home"),

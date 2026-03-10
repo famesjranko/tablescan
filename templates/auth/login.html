@@ -1,0 +1,150 @@
+{% extends 'base.html' %}
+
+{% block title %}Login - TableScan{% endblock %}
+
+{% block content %}
+<div class="max-w-md mx-auto">
+    <div class="text-center mb-8">
+        <h1 class="text-3xl font-bold text-gray-900">Sign In</h1>
+        <p class="mt-2 text-gray-600">Access your TableScan account</p>
+    </div>
+
+    <div x-data="loginForm()" class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+        <form @submit.prevent="submitForm">
+            {% csrf_token %}
+
+            <!-- Username Field -->
+            <div class="mb-4">
+                <label for="username" class="block text-sm font-medium text-gray-700 mb-1">Username</label>
+                <input
+                    type="text"
+                    id="username"
+                    name="username"
+                    x-model="username"
+                    required
+                    class="w-full rounded-md border-gray-300 shadow-sm focus:border-primary focus:ring-primary sm:text-sm border px-3 py-2"
+                    placeholder="Enter your username"
+                >
+            </div>
+
+            <!-- Password Field -->
+            <div class="mb-6">
+                <label for="password" class="block text-sm font-medium text-gray-700 mb-1">Password</label>
+                <input
+                    type="password"
+                    id="password"
+                    name="password"
+                    x-model="password"
+                    required
+                    class="w-full rounded-md border-gray-300 shadow-sm focus:border-primary focus:ring-primary sm:text-sm border px-3 py-2"
+                    placeholder="Enter your password"
+                >
+            </div>
+
+            <!-- Error Message -->
+            <div x-show="errorMessage" x-cloak class="mb-4 bg-red-50 border border-red-200 rounded-md p-3">
+                <div class="flex">
+                    <svg class="h-5 w-5 text-red-400" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"/>
+                    </svg>
+                    <p class="ml-3 text-sm text-red-700" x-text="errorMessage"></p>
+                </div>
+            </div>
+
+            <!-- Success Message -->
+            <div x-show="successMessage" x-cloak class="mb-4 bg-green-50 border border-green-200 rounded-md p-3">
+                <div class="flex">
+                    <svg class="h-5 w-5 text-green-400" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
+                    </svg>
+                    <p class="ml-3 text-sm text-green-700" x-text="successMessage"></p>
+                </div>
+            </div>
+
+            <!-- Submit Button -->
+            <button
+                type="submit"
+                :disabled="isLoading || !username || !password"
+                :class="isLoading || !username || !password ? 'bg-gray-300 cursor-not-allowed' : 'bg-primary hover:bg-blue-600'"
+                class="w-full flex justify-center items-center py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary transition-colors"
+            >
+                <template x-if="!isLoading">
+                    <span>Sign In</span>
+                </template>
+                <template x-if="isLoading">
+                    <span class="flex items-center">
+                        <svg class="animate-spin -ml-1 mr-3 h-5 w-5 text-white" fill="none" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        Signing in...
+                    </span>
+                </template>
+            </button>
+        </form>
+
+        <!-- Register Link -->
+        <div class="mt-6 text-center">
+            <p class="text-sm text-gray-600">
+                Don't have an account?
+                <a href="{% url 'auth_register_page' %}" class="font-medium text-primary hover:text-blue-500">
+                    Create one here
+                </a>
+            </p>
+        </div>
+    </div>
+</div>
+
+<script>
+function loginForm() {
+    return {
+        username: '',
+        password: '',
+        isLoading: false,
+        errorMessage: null,
+        successMessage: null,
+
+        async submitForm() {
+            this.isLoading = true;
+            this.errorMessage = null;
+            this.successMessage = null;
+
+            try {
+                const response = await fetch('/api/auth/login/', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': '{{ csrf_token }}'
+                    },
+                    body: JSON.stringify({
+                        username: this.username,
+                        password: this.password
+                    })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    // Store tokens in localStorage
+                    localStorage.setItem('access_token', data.access);
+                    localStorage.setItem('refresh_token', data.refresh);
+
+                    this.successMessage = 'Login successful! Redirecting...';
+
+                    // Redirect to home page
+                    setTimeout(() => {
+                        window.location.href = '/';
+                    }, 1000);
+                } else {
+                    this.errorMessage = data.detail || 'Invalid username or password.';
+                }
+            } catch (error) {
+                this.errorMessage = 'Network error. Please try again.';
+            } finally {
+                this.isLoading = false;
+            }
+        }
+    }
+}
+</script>
+{% endblock %}

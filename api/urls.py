@@ -14,6 +14,9 @@ from rest_framework import routers
 from . import views
 from .views import *
 from .views import UploadView
+from .views_auth import RegisterView, LoginView, LogoutView
+
+from rest_framework_simplejwt.views import TokenRefreshView
 
 from django.conf.urls import url
 from django.conf.urls.static import static
@@ -25,9 +28,18 @@ router = routers.DefaultRouter()
 router.register(r"reports", views.ReportViewSet, basename='api-reports')
 router.register(r"extracted", views.ExtractedViewSet, basename='api-extracted')
 
+# Authentication URL patterns
+auth_urlpatterns = [
+    path('register/', RegisterView.as_view(), name='auth_register'),
+    path('login/', LoginView.as_view(), name='auth_login'),
+    path('logout/', LogoutView.as_view(), name='auth_logout'),
+    path('refresh/', TokenRefreshView.as_view(), name='auth_refresh'),
+]
+
 # API url paths
 api_urlpatterns = [
     path("", include(router.urls)),
+    path("auth/", include(auth_urlpatterns)),
     url(r"^upload/$", UploadView.as_view(), name="api_upload"),
 ]
 
