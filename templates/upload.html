@@ -19,7 +19,7 @@
                 @dragleave.prevent="isDragging = false"
                 @drop.prevent="handleDrop($event)"
                 :class="isDragging ? 'border-primary bg-blue-50' : 'border-gray-300'"
-                class="border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors"
+                class="border-2 border-dashed rounded-lg p-4 sm:p-8 text-center cursor-pointer transition-colors"
                 @click="$refs.fileInput.click()"
             >
                 <input
@@ -63,7 +63,7 @@
             </div>
 
             <!-- Page Range Options -->
-            <div class="mt-6 grid grid-cols-2 gap-4">
+            <div class="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                     <label for="start_page" class="block text-sm font-medium text-gray-700">Start Page</label>
                     <input

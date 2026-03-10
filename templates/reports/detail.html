@@ -13,9 +13,9 @@
             </svg>
             <span class="text-gray-900">{{ report.name }}</span>
         </div>
-        <div class="flex items-center justify-between">
+        <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
             <h1 class="text-2xl font-bold text-gray-900">{{ report.name }}</h1>
-            <div class="flex items-center space-x-3">
+            <div class="flex flex-wrap items-center gap-2 sm:gap-3">
                 <a href="{{ report.document.url }}" download class="inline-flex items-center px-3 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">
                     <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
@@ -36,7 +36,7 @@
 
     <!-- Report Info -->
     <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-4 mb-6">
-        <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
             <div>
                 <dt class="text-sm font-medium text-gray-500">File Type</dt>
                 <dd class="mt-1 text-sm text-gray-900">{{ report.f_type|upper }}</dd>
@@ -62,8 +62,8 @@
     <!-- Tables by Page -->
     <div x-data="{ activeTab: 'all' }">
         <!-- Tab Navigation -->
-        <div class="border-b border-gray-200 mb-6">
-            <nav class="-mb-px flex space-x-8">
+        <div class="border-b border-gray-200 mb-6 overflow-x-auto">
+            <nav class="-mb-px flex space-x-4 sm:space-x-8">
                 <button
                     @click="activeTab = 'all'"
                     :class="activeTab === 'all' ? 'border-primary text-primary' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'"
