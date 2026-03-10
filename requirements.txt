@@ -63,6 +63,9 @@ python-decouple>=3.6
 # PyMuPDF for PDF analysis and page classification
 pymupdf>=1.23.0
 
+# pdfplumber for text-based table extraction
+pdfplumber>=0.10.0
+
 # Testing
 pytest>=7.0.0
 pytest-django>=4.5.0
