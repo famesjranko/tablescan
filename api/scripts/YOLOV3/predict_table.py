@@ -27,7 +27,7 @@ from pathlib import Path, PurePath
 import os
 
 # get django app
-os.environ.setdefault("DJANGO_SETTINGS_MODULE", "api.settings")
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "tablescan.settings")
 django.setup()
 
 # import database
@@ -54,6 +54,67 @@ from pdf2image import convert_from_path, convert_from_bytes
 from api.scripts.YOLOV3.utils.detect_func import detectTable, parameters
 from api.scripts.table_detector import detect_table_type_from_array
 from api.scripts.header_processor import process_table_headers, strip_empty_rows_and_cols
+from api.scripts.extractors import MultiExtractor, VisionExtractor, ExtractionScorer
+from api.scripts.xlsx_exporter import export_to_xlsx
+from typing import Optional, List
+
+
+def build_structure_json(df, metadata: dict = None) -> dict:
+    """
+    Build rich structure_json from a DataFrame with cell-level data.
+
+    Creates a structured JSON representation of the table that includes:
+    - Cell values organized by row and column
+    - Cell spans if detected (from metadata)
+    - Row and column counts
+
+    Args:
+        df: pandas DataFrame containing the table data
+        metadata: Optional extraction metadata that may contain span info
+
+    Returns:
+        dict with structure_json format containing cells array and dimensions
+    """
+    if df is None or df.empty:
+        return None
+
+    rows, cols = df.shape
+    cells = []
+
+    for row_idx in range(rows):
+        for col_idx in range(cols):
+            cell_value = df.iloc[row_idx, col_idx]
+            cell_data = {
+                "row": row_idx,
+                "col": col_idx,
+                "value": str(cell_value) if cell_value is not None else "",
+            }
+
+            # Check metadata for span information
+            # Camelot and other extractors may provide cell span data
+            if metadata:
+                cells_meta = metadata.get("cells", [])
+                for cm in cells_meta:
+                    if cm.get("row") == row_idx and cm.get("col") == col_idx:
+                        if cm.get("rowspan", 1) > 1:
+                            cell_data["rowspan"] = cm["rowspan"]
+                        if cm.get("colspan", 1) > 1:
+                            cell_data["colspan"] = cm["colspan"]
+                        break
+
+            cells.append(cell_data)
+
+    structure = {
+        "rows": rows,
+        "cols": cols,
+        "cells": cells,
+    }
+
+    # Add header information if available
+    if metadata and metadata.get("header_rows") is not None:
+        structure["header_rows"] = metadata["header_rows"]
+
+    return structure
 
 
 # %%
@@ -165,7 +226,8 @@ def tableValidate(dataframe) -> bool:
 
 
 def detect_tables(file_path, page_number, output_type, report_db, extract_dir,
-                  flavor='auto', row_tol=2, strip_text='\n', merge_headers=True) -> list:
+                  flavor='auto', row_tol=2, strip_text='\n', merge_headers=True,
+                  page_type: Optional[str] = None) -> list:
     """
     Main function for detection, extraction, and saving extracted tables to database
 
@@ -349,8 +411,33 @@ def detect_tables(file_path, page_number, output_type, report_db, extract_dir,
     #
     # Note2:    Can format the JSON Export structure with optional arg 'orient=[String]'
     #           choices: split, records, index, values, table, columns (the default format)
+
+    # Build bounding box data from interesting_areas (YOLO detection coordinates)
+    bounding_boxes = []
+    for area in interesting_areas:
+        coords = area.split(',')
+        if len(coords) == 4:
+            bounding_boxes.append({
+                'x0': float(coords[0]),
+                'y0': float(coords[1]),
+                'x1': float(coords[2]),
+                'y1': float(coords[3])
+            })
+
     for i, db in enumerate(output_camelot):
         # log.output('SUCCESS', f'found table: page {pg}, table {i}')
+
+        # Get bounding box for this table (if available)
+        bbox = bounding_boxes[i] if i < len(bounding_boxes) else None
+
+        # Build structure_json from DataFrame
+        structure = build_structure_json(db)
+
+        # Get confidence from parsing report (if available)
+        confidence = None
+        if i < len(report) and report[i]:
+            confidence = report[i].get('accuracy', 0) / 100.0  # Convert 0-100 to 0-1
+
         for key, value in extract_dir.items():
             # build path for file and export
             e_name = filename[:-4] + "-" + str(pg) + "-table-" + str(i) + "." + key
@@ -361,20 +448,355 @@ def detect_tables(file_path, page_number, output_type, report_db, extract_dir,
                 db.to_csv(str(e_path), index=False)
             elif key == "json":
                 db.to_json(str(e_path), orient="columns")
+            elif key == "xlsx":
+                # Export to XLSX with cell spans and header formatting (US-018)
+                export_to_xlsx(db, str(e_path), structure_json=structure, header_rows=1)
 
             # build cleaned path for database
             db_path = PurePath(PurePath(e_path).parts[-3], key, PurePath(e_path).name)
 
-            # create csv database instance
+            # create csv database instance with rich fields (US-017)
             Extracted.objects.create(
                 report=report_db,
                 file=str(db_path),
                 f_type=key,
                 page_num=pg,
                 table_num=i,
+                # Rich metadata fields
+                page_type=page_type,
+                extraction_method=f'camelot_{actual_flavor}',
+                confidence_score=confidence,
+                structure_json=structure,
+                bounding_box=bbox,
             )
 
     # log.output('INFO', f'finished processing page {page_number}')
+
+    return report
+
+
+# %%
+
+
+def extract_tables_direct(file_path: str, page_number: int, output_type: str,
+                          report_db, extract_dir: dict, flavor: str = 'auto',
+                          row_tol: int = 2, strip_text: str = '\n',
+                          merge_headers: bool = True,
+                          page_type: Optional[str] = None) -> list:
+    """
+    Extract tables directly using multiple extractors without YOLO detection.
+    Used for born-digital PDF pages where text layer is reliable.
+
+    Runs both Camelot (lattice + stream) and pdfplumber extractors,
+    then uses ExtractionScorer to select the best result for each table.
+
+    Args:
+        file_path: Path to PDF file
+        page_number: Page number to process
+        output_type: Output format type
+        report_db: Database report instance
+        extract_dir: Dictionary of extraction directories
+        flavor: Camelot flavor ('auto', 'lattice', or 'stream') - used for fallback
+        row_tol: Row tolerance for Camelot parsing
+        strip_text: Characters to strip from cell text
+        merge_headers: Whether to merge fragmented multi-row headers
+
+    Returns:
+        list: Parsing reports for extracted tables
+    """
+    log = Logging()
+    pg = page_number
+
+    log.output('INFO', f'[multi-extractor] Starting extraction for page {pg}')
+
+    # Use MultiExtractor to run all backends and select best
+    multi_extractor = MultiExtractor()
+
+    try:
+        best_results, comparison = multi_extractor.extract_with_comparison(
+            file_path, pg, table_areas=None
+        )
+    except Exception as e:
+        log.output('WARNING', f'[multi-extractor] All extractors failed: {e}')
+        best_results = []
+        comparison = {'extractors_run': [], 'total_candidates': 0}
+
+    # Log extraction summary
+    log.output('INFO', f'[multi-extractor] Ran {len(comparison.get("extractors_run", []))} extractors')
+    for ext_info in comparison.get('extractors_run', []):
+        log.output('DEBUG', f'[multi-extractor] {ext_info["name"]}: {ext_info["tables_found"]} table(s)')
+
+    if not best_results:
+        log.output('INFO', f'[multi-extractor] No tables found on page {pg}')
+        return []
+
+    # Log selected methods
+    for sel in comparison.get('selected_methods', []):
+        log.output('INFO',
+            f'[multi-extractor] Selected {sel["method"]} '
+            f'(score={sel["score"]:.4f}, confidence={sel["confidence"]:.3f})'
+        )
+
+    # Build parsing reports (for compatibility with existing code)
+    report = []
+    processed_tables = []
+    extraction_methods = []
+    processed_results = []  # Track original results for metadata access
+
+    for result in best_results:
+        # Create a parsing report compatible with Camelot format
+        parsing_report = {
+            'accuracy': result.confidence * 100,  # Convert 0-1 to 0-100
+            'whitespace': result.metadata.get('parsing_report', {}).get('whitespace', 0),
+            'extraction_method': result.method,
+        }
+        report.append(parsing_report)
+
+        # Process the dataframe
+        table = result.dataframe.copy()
+
+        # Clean table
+        table = table.fillna("")
+        table = strip_empty_rows_and_cols(table)
+
+        if merge_headers:
+            table = process_table_headers(table, merge_headers=True)
+
+        # Validate table
+        if tableValidate(table):
+            processed_tables.append(table)
+            extraction_methods.append(result.method)
+            processed_results.append(result)  # Keep track of the result
+
+            log.output('DEBUG',
+                f'[multi-extractor] Table validated: '
+                f'{len(table)} rows x {len(table.columns)} cols, method={result.method}'
+            )
+
+    # Get pdf filename
+    filename = Path(file_path).name
+
+    # Export and save to database
+    for i, (db, method, result) in enumerate(zip(processed_tables, extraction_methods, processed_results)):
+        # Extract bounding box from result metadata
+        bbox = result.metadata.get('bounding_box') if result.metadata else None
+
+        # Build structure_json from DataFrame
+        structure = build_structure_json(db, result.metadata if result.metadata else None)
+
+        # Get confidence score from the result
+        confidence = result.confidence
+
+        for key, value in extract_dir.items():
+            e_name = filename[:-4] + "-" + str(pg) + "-table-" + str(i) + "." + key
+            e_path = PurePath.joinpath(value, e_name)
+
+            if key == "csv":
+                db.to_csv(str(e_path), index=False)
+            elif key == "json":
+                # Include extraction method in JSON output (backwards compatible - additive)
+                # Use to_json to get columns format, then parse and add metadata
+                import json as json_lib
+                from io import StringIO
+
+                # Get JSON string in columns format (original format)
+                json_str = db.to_json(orient="columns")
+                json_output = json_lib.loads(json_str)
+
+                # Add extraction metadata (additive - backwards compatible)
+                json_output['_extraction_metadata'] = {
+                    'method': method,
+                    'page_num': pg,
+                    'table_num': i,
+                }
+
+                with open(str(e_path), 'w') as f:
+                    json_lib.dump(json_output, f)
+            elif key == "xlsx":
+                # Export to XLSX with cell spans and header formatting (US-018)
+                export_to_xlsx(db, str(e_path), structure_json=structure, header_rows=1)
+
+            db_path = PurePath(PurePath(e_path).parts[-3], key, PurePath(e_path).name)
+
+            # Create database instance with rich fields (US-017)
+            Extracted.objects.create(
+                report=report_db,
+                file=str(db_path),
+                f_type=key,
+                page_num=pg,
+                table_num=i,
+                # Rich metadata fields
+                page_type=page_type,
+                extraction_method=method,
+                confidence_score=confidence,
+                structure_json=structure,
+                bounding_box=bbox,
+            )
+
+    log.output('INFO', f'[multi-extractor] Page {pg}: exported {len(processed_tables)} table(s)')
+
+    return report
+
+
+# %%
+
+
+def extract_tables_vision(file_path: str, page_number: int, output_type: str,
+                          report_db, extract_dir: dict, flavor: str = 'auto',
+                          row_tol: int = 2, strip_text: str = '\n',
+                          merge_headers: bool = True,
+                          page_type: Optional[str] = None) -> list:
+    """
+    Extract tables using VisionExtractor for scanned PDF pages.
+    Uses img2table for vision-based table detection and extraction.
+
+    Results are scored using ExtractionScorer (same as born-digital) to ensure
+    consistent quality selection across extraction methods.
+
+    Args:
+        file_path: Path to PDF file
+        page_number: Page number to process
+        output_type: Output format type
+        report_db: Database report instance
+        extract_dir: Dictionary of extraction directories
+        flavor: Unused for vision extraction (kept for API compatibility)
+        row_tol: Unused for vision extraction (kept for API compatibility)
+        strip_text: Characters to strip from cell text
+        merge_headers: Whether to merge fragmented multi-row headers
+
+    Returns:
+        list: Parsing reports for extracted tables
+    """
+    log = Logging()
+    pg = page_number
+
+    log.output('INFO', f'[vision-extractor] Starting extraction for page {pg}')
+
+    # Initialize VisionExtractor and scorer
+    vision_extractor = VisionExtractor(
+        implicit_rows=True,
+        borderless_tables=True,
+        min_confidence=0.5
+    )
+    scorer = ExtractionScorer()
+
+    try:
+        # Extract tables using vision-based detection
+        results = vision_extractor.extract(file_path, pg, table_areas=None)
+        log.output('INFO', f'[vision-extractor] Found {len(results)} table(s) on page {pg}')
+    except Exception as e:
+        log.output('WARNING', f'[vision-extractor] Extraction failed: {e}')
+        return []
+
+    if not results:
+        log.output('INFO', f'[vision-extractor] No tables found on page {pg}')
+        return []
+
+    # Score all results (same scoring as born-digital)
+    scored_results = scorer.score_all(results)
+
+    # Log scores
+    for result, score in scored_results:
+        log.output('DEBUG',
+            f'[vision-extractor] {result.method}: score={score:.4f}, '
+            f'confidence={result.confidence:.3f}'
+        )
+
+    # Build parsing reports (for compatibility with existing code)
+    report = []
+    processed_tables = []
+    extraction_methods = []
+    processed_results = []  # Track original results for metadata access
+
+    for result, score in scored_results:
+        # Create a parsing report compatible with Camelot format
+        parsing_report = {
+            'accuracy': result.confidence * 100,  # Convert 0-1 to 0-100
+            'whitespace': 0,  # Not applicable for vision extraction
+            'extraction_method': result.method,
+            'computed_score': score,
+        }
+        report.append(parsing_report)
+
+        # Process the dataframe
+        table = result.dataframe.copy()
+
+        # Clean table
+        table = table.fillna("")
+        table = strip_empty_rows_and_cols(table)
+
+        if merge_headers:
+            table = process_table_headers(table, merge_headers=True)
+
+        # Validate table
+        if tableValidate(table):
+            processed_tables.append(table)
+            extraction_methods.append(result.method)
+            processed_results.append(result)  # Keep track of the result
+
+            log.output('DEBUG',
+                f'[vision-extractor] Table validated: '
+                f'{len(table)} rows x {len(table.columns)} cols, method={result.method}'
+            )
+
+    # Get pdf filename
+    filename = Path(file_path).name
+
+    # Export and save to database (same format as born-digital)
+    for i, (db, method, result) in enumerate(zip(processed_tables, extraction_methods, processed_results)):
+        # Extract bounding box from result metadata
+        bbox = result.metadata.get('bounding_box') if result.metadata else None
+
+        # Build structure_json from DataFrame
+        structure = build_structure_json(db, result.metadata if result.metadata else None)
+
+        # Get confidence score from the result
+        confidence = result.confidence
+
+        for key, value in extract_dir.items():
+            e_name = filename[:-4] + "-" + str(pg) + "-table-" + str(i) + "." + key
+            e_path = PurePath.joinpath(value, e_name)
+
+            if key == "csv":
+                db.to_csv(str(e_path), index=False)
+            elif key == "json":
+                import json as json_lib
+
+                json_str = db.to_json(orient="columns")
+                json_output = json_lib.loads(json_str)
+
+                # Add extraction metadata (additive - backwards compatible)
+                json_output['_extraction_metadata'] = {
+                    'method': method,
+                    'page_num': pg,
+                    'table_num': i,
+                    'page_type': page_type or 'scanned',
+                }
+
+                with open(str(e_path), 'w') as f:
+                    json_lib.dump(json_output, f)
+            elif key == "xlsx":
+                # Export to XLSX with cell spans and header formatting (US-018)
+                export_to_xlsx(db, str(e_path), structure_json=structure, header_rows=1)
+
+            db_path = PurePath(PurePath(e_path).parts[-3], key, PurePath(e_path).name)
+
+            # Create database instance with rich fields (US-017)
+            Extracted.objects.create(
+                report=report_db,
+                file=str(db_path),
+                f_type=key,
+                page_num=pg,
+                table_num=i,
+                # Rich metadata fields
+                page_type=page_type,
+                extraction_method=method,
+                confidence_score=confidence,
+                structure_json=structure,
+                bounding_box=bbox,
+            )
+
+    log.output('INFO', f'[vision-extractor] Page {pg}: exported {len(processed_tables)} table(s)')
 
     return report
 

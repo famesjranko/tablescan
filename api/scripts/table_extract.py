@@ -48,11 +48,184 @@ from PyPDF2 import PdfFileReader
 
 from api.scripts.logging import Logging
 from api.models import Report
-from api.scripts.YOLOV3.predict_table import detect_tables
+from api.scripts.YOLOV3.predict_table import detect_tables, extract_tables_direct, extract_tables_vision
+from api.scripts.page_classifier import PageClassifier
+from api.scripts.extractors import VisionExtractor, ExtractionScorer
+
+
+# Feature flags - loaded from docs/prd.json if available
+def _load_feature_flags() -> dict:
+    """Load feature flags from prd.json."""
+    import json
+    default_flags = {
+        'use_page_classifier': True,
+        'use_multi_extractor': True,
+        'use_vision_detector': True,
+        'use_rich_schema': False,
+        'legacy_yolo_enabled': True,
+    }
+    try:
+        prd_path = Path(__file__).parent.parent.parent / 'docs' / 'prd.json'
+        with open(prd_path, 'r') as f:
+            prd = json.load(f)
+            return prd.get('featureFlags', default_flags)
+    except Exception:
+        return default_flags
+
+
+FEATURE_FLAGS = _load_feature_flags()
 
 
 # camelot accuracy report list
 report_list = []
+
+# Global page classifier instance for multiprocessing
+_page_classifier = None
+
+
+def _get_page_classifier() -> PageClassifier:
+    """Get or create page classifier instance (for multiprocessing)."""
+    global _page_classifier
+    if _page_classifier is None:
+        _page_classifier = PageClassifier()
+    return _page_classifier
+
+
+def process_page_with_routing(
+    file_path: str,
+    page_num: int,
+    output_type: str,
+    report_db,
+    extract_dir: dict,
+    flavor: str,
+    row_tol: int,
+    strip_text: str,
+    merge_headers: bool
+) -> list:
+    """
+    Process a single page with routing based on page classification.
+
+    Born-digital pages skip YOLO and go directly to multi-extractor (Camelot + pdfplumber).
+    Scanned pages route to VisionExtractor (img2table) with fallback to YOLO.
+    Mixed pages try VisionExtractor first, fallback to YOLO.
+
+    The YOLO pipeline can be bypassed entirely via the use_vision_detector feature flag.
+    If VisionExtractor fails, gracefully falls back to YOLO (unless legacy_yolo_enabled=False).
+
+    Args:
+        file_path: Path to PDF file
+        page_num: Page number to process (1-indexed)
+        output_type: Output format type
+        report_db: Database report instance
+        extract_dir: Dictionary of extraction directories
+        flavor: Camelot flavor ('auto', 'lattice', or 'stream')
+        row_tol: Row tolerance for Camelot parsing
+        strip_text: Characters to strip from cell text
+        merge_headers: Whether to merge fragmented multi-row headers
+
+    Returns:
+        list: Parsing reports for extracted tables
+    """
+    log = Logging()
+    classifier = _get_page_classifier()
+
+    # Classify page (PageClassifier uses 0-indexed pages)
+    classification = classifier.classify(file_path, page_num - 1)
+
+    log.output(
+        'INFO',
+        f'Page {page_num}: type={classification.type}, '
+        f'text_coverage={classification.text_coverage:.1%}, '
+        f'has_images={classification.has_images}'
+    )
+
+    # Get feature flags
+    use_vision = FEATURE_FLAGS.get('use_vision_detector', True)
+    legacy_yolo = FEATURE_FLAGS.get('legacy_yolo_enabled', True)
+
+    if classification.type == 'born_digital':
+        # Skip YOLO detection and JPG conversion for born-digital pages
+        log.output('INFO', f'Page {page_num}: Using direct multi-extractor (born-digital)')
+        return extract_tables_direct(
+            file_path, page_num, output_type, report_db, extract_dir,
+            flavor, row_tol, strip_text, merge_headers,
+            page_type=classification.type
+        )
+
+    elif classification.type == 'scanned':
+        # Route scanned pages to VisionExtractor
+        if use_vision:
+            log.output('INFO', f'Page {page_num}: Using VisionExtractor (scanned)')
+            try:
+                result = extract_tables_vision(
+                    file_path, page_num, output_type, report_db, extract_dir,
+                    flavor, row_tol, strip_text, merge_headers,
+                    page_type=classification.type
+                )
+                # If vision extraction found tables, return results
+                if result:
+                    return result
+                # If no tables found, try YOLO fallback if enabled
+                log.output('INFO', f'Page {page_num}: VisionExtractor found no tables, trying fallback')
+            except Exception as e:
+                log.output('WARNING', f'Page {page_num}: VisionExtractor failed: {e}')
+
+            # Graceful fallback to YOLO if VisionExtractor fails or finds nothing
+            if legacy_yolo:
+                log.output('INFO', f'Page {page_num}: Falling back to YOLO pipeline')
+                return detect_tables(
+                    file_path, page_num, output_type, report_db, extract_dir,
+                    flavor, row_tol, strip_text, merge_headers,
+                    page_type=classification.type
+                )
+            else:
+                log.output('WARNING', f'Page {page_num}: No fallback available (YOLO disabled)')
+                return []
+        else:
+            # VisionExtractor disabled, use YOLO directly
+            if legacy_yolo:
+                log.output('INFO', f'Page {page_num}: Using YOLO pipeline (scanned, vision disabled)')
+                return detect_tables(
+                    file_path, page_num, output_type, report_db, extract_dir,
+                    flavor, row_tol, strip_text, merge_headers,
+                    page_type=classification.type
+                )
+            else:
+                log.output('WARNING', f'Page {page_num}: No extractor available for scanned page')
+                return []
+
+    else:  # mixed pages
+        # Mixed pages: try VisionExtractor first (better for scanned content)
+        if use_vision:
+            log.output('INFO', f'Page {page_num}: Trying VisionExtractor (mixed)')
+            try:
+                result = extract_tables_vision(
+                    file_path, page_num, output_type, report_db, extract_dir,
+                    flavor, row_tol, strip_text, merge_headers,
+                    page_type=classification.type
+                )
+                if result:
+                    return result
+                log.output('INFO', f'Page {page_num}: VisionExtractor found no tables')
+            except Exception as e:
+                log.output('WARNING', f'Page {page_num}: VisionExtractor failed: {e}')
+
+        # Fallback to YOLO for mixed pages
+        if legacy_yolo:
+            log.output('INFO', f'Page {page_num}: Using YOLO pipeline (mixed)')
+            return detect_tables(
+                file_path, page_num, output_type, report_db, extract_dir,
+                flavor, row_tol, strip_text, merge_headers,
+                page_type=classification.type
+            )
+        else:
+            # Try direct extraction as last resort for mixed pages
+            log.output('INFO', f'Page {page_num}: Trying direct extraction (mixed, YOLO disabled)')
+            return extract_tables_direct(
+                file_path, page_num, output_type, report_db, extract_dir,
+                flavor, row_tol, strip_text, merge_headers,
+                page_type=classification.type
+            )
 
 
 def pdf_stats(
@@ -393,6 +566,7 @@ def extract(file_path: str, start_page: int, end_page: int,
     extract_dir = {
         "csv": PurePath(full_working_dir, "csv"),
         "json": PurePath(full_working_dir, "json"),
+        "xlsx": PurePath(full_working_dir, "xlsx"),
     }
 
     # create new folders for storing to be extracted files.
@@ -415,20 +589,21 @@ def extract(file_path: str, start_page: int, end_page: int,
 
     log.output("INFO", f"multiprocessing using {mp.cpu_count()} cpu cores")
 
-    # Multi-processing 2: Use async to loop to parallelize YOLOV3
+    # Multi-processing 2: Use async to loop to parallelize extraction
     # Note: apply_async returns an unordered list
+    # Pages are routed based on classification (born-digital skips YOLO)
     try:
         log.output("INFO", f"starting extractions for pages {start_at} to {end_at}...")
         log.output("INFO", f"extraction options: flavor={flavor}, row_tol={row_tol}, merge_headers={merge_headers}")
         for num in range(start_at, end_at + 1, 1):
             detection_objects = pool.apply_async(
-                detect_tables,
+                process_page_with_routing,
                 (str(file_path), num, "all", report_db, extract_dir,
                  flavor, row_tol, strip_text, merge_headers),
                 callback=collect_parsing_report,
             )
     except Exception as e:
-        error_msg = "".join(["from predict_tably.py: ", str(e)])
+        error_msg = "".join(["from extraction pipeline: ", str(e)])
         report_db.delete()
         log.output("INFO", "removed database object")
         raise SystemError(error_msg)
