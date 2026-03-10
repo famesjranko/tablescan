@@ -1,0 +1,27 @@
+# TableScan 2.0 - Ralph Progress Log
+Started: March 2026
+
+## Codebase Patterns
+- Django 3.2 with DRF
+- Extraction pipeline in api/scripts/
+- Main orchestrator: api/scripts/table_extract.py
+- Per-page detection: api/scripts/YOLOV3/predict_table.py
+- Models in api/models.py (Report, Extracted)
+- Async via Celery (api/tasks.py)
+- Current extraction: pdf2image -> YOLO -> Camelot
+
+## Key Files
+- api/scripts/table_extract.py - extract() function is main entry point
+- api/scripts/YOLOV3/predict_table.py - detect_tables() per page
+- api/scripts/table_detector.py - lattice/stream detection (loosely coupled)
+- api/scripts/header_processor.py - header merging (loosely coupled)
+- api/models.py - Report and Extracted models
+- api/views.py - UploadView, ReportViewSet, ExtractedViewSet
+
+## Conventions
+- No co-author lines in commits (see CLAUDE.md)
+- Tests in api/tests/
+- Feature flags in docs/prd.json featureFlags section
+
+---
+
