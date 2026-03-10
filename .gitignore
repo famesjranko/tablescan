@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+venv/
+env/
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Django
+db.sqlite3
+*.log
+staticfiles/
+
+# Local/test files
+*.pdf
+*.csv
+*.pdf:Zone.Identifier
+
+# Environment
+.env
+.env.local
+
+# Claude
+.claude/
+CLAUDE.md
+
+# YOLO weights - keep in repo for now (needed for model)
+# *.weights
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,364 @@
+{% extends 'base.html' %}
+
+{% block title %}Upload PDF - TableScan{% endblock %}
+
+{% block content %}
+<div class="max-w-2xl mx-auto">
+    <div class="text-center mb-8">
+        <h1 class="text-3xl font-bold text-gray-900">Upload PDF Document</h1>
+        <p class="mt-2 text-gray-600">Extract tables from your PDF using AI-powered detection</p>
+    </div>
+
+    <div x-data="uploadForm()" class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+        <form @submit.prevent="submitForm" enctype="multipart/form-data">
+            {% csrf_token %}
+
+            <!-- Drag and Drop Zone -->
+            <div
+                @dragover.prevent="isDragging = true"
+                @dragleave.prevent="isDragging = false"
+                @drop.prevent="handleDrop($event)"
+                :class="isDragging ? 'border-primary bg-blue-50' : 'border-gray-300'"
+                class="border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors"
+                @click="$refs.fileInput.click()"
+            >
+                <input
+                    type="file"
+                    name="document"
+                    accept=".pdf"
+                    x-ref="fileInput"
+                    @change="handleFileSelect($event)"
+                    class="hidden"
+                    required
+                >
+
+                <template x-if="!selectedFile">
+                    <div>
+                        <svg class="mx-auto h-12 w-12 text-gray-400" stroke="currentColor" fill="none" viewBox="0 0 48 48">
+                            <path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8m-12 4h.02" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+                        </svg>
+                        <p class="mt-2 text-sm text-gray-600">
+                            <span class="font-semibold text-primary">Click to upload</span> or drag and drop
+                        </p>
+                        <p class="mt-1 text-xs text-gray-500">PDF files only</p>
+                    </div>
+                </template>
+
+                <template x-if="selectedFile">
+                    <div class="flex items-center justify-center space-x-3">
+                        <svg class="h-8 w-8 text-red-500" fill="currentColor" viewBox="0 0 20 20">
+                            <path fill-rule="evenodd" d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4z" clip-rule="evenodd"/>
+                        </svg>
+                        <div class="text-left">
+                            <p class="text-sm font-medium text-gray-900" x-text="selectedFile.name"></p>
+                            <p class="text-xs text-gray-500" x-text="formatFileSize(selectedFile.size)"></p>
+                        </div>
+                        <button type="button" @click.stop="clearFile()" class="text-gray-400 hover:text-gray-600">
+                            <svg class="h-5 w-5" fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd"/>
+                            </svg>
+                        </button>
+                    </div>
+                </template>
+            </div>
+
+            <!-- Page Range Options -->
+            <div class="mt-6 grid grid-cols-2 gap-4">
+                <div>
+                    <label for="start_page" class="block text-sm font-medium text-gray-700">Start Page</label>
+                    <input
+                        type="number"
+                        name="start_page"
+                        id="start_page"
+                        x-model="startPage"
+                        min="1"
+                        class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary focus:ring-primary sm:text-sm border px-3 py-2"
+                        placeholder="1"
+                    >
+                </div>
+                <div>
+                    <label for="end_page" class="block text-sm font-medium text-gray-700">End Page</label>
+                    <input
+                        type="number"
+                        name="end_page"
+                        id="end_page"
+                        x-model="endPage"
+                        min="-1"
+                        class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary focus:ring-primary sm:text-sm border px-3 py-2"
+                        placeholder="-1 (all pages)"
+                    >
+                    <p class="mt-1 text-xs text-gray-500">Use -1 for all pages</p>
+                </div>
+            </div>
+
+            <!-- Extraction Options -->
+            <div class="mt-6 border-t border-gray-200 pt-6">
+                <button
+                    type="button"
+                    @click="showAdvanced = !showAdvanced"
+                    class="flex items-center text-sm font-medium text-gray-700 hover:text-primary"
+                >
+                    <svg
+                        :class="showAdvanced ? 'rotate-90' : ''"
+                        class="h-4 w-4 mr-2 transition-transform"
+                        fill="currentColor"
+                        viewBox="0 0 20 20"
+                    >
+                        <path fill-rule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clip-rule="evenodd"/>
+                    </svg>
+                    Advanced Extraction Options
+                </button>
+
+                <div x-show="showAdvanced" x-cloak class="mt-4 space-y-4">
+                    <!-- Table Type Selection -->
+                    <div>
+                        <label for="camelot_flavor" class="block text-sm font-medium text-gray-700">Table Type</label>
+                        <select
+                            name="camelot_flavor"
+                            id="camelot_flavor"
+                            x-model="camelotFlavor"
+                            class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary focus:ring-primary sm:text-sm border px-3 py-2"
+                        >
+                            <option value="auto">Auto-detect (recommended)</option>
+                            <option value="lattice">Bordered tables (with gridlines)</option>
+                            <option value="stream">Borderless tables (no gridlines)</option>
+                        </select>
+                        <p class="mt-1 text-xs text-gray-500">Auto-detect analyzes each page to choose the best method</p>
+                    </div>
+
+                    <!-- Header Merging -->
+                    <div class="flex items-center">
+                        <input
+                            type="checkbox"
+                            name="merge_headers"
+                            id="merge_headers"
+                            x-model="mergeHeaders"
+                            class="h-4 w-4 text-primary focus:ring-primary border-gray-300 rounded"
+                        >
+                        <label for="merge_headers" class="ml-2 block text-sm text-gray-700">
+                            Auto-merge multi-row headers
+                        </label>
+                    </div>
+                    <p class="text-xs text-gray-500 -mt-2 ml-6">Combines fragmented header rows into a single header</p>
+
+                    <!-- Row Tolerance (for stream flavor) -->
+                    <div x-show="camelotFlavor === 'stream'">
+                        <label for="row_tol" class="block text-sm font-medium text-gray-700">Row Tolerance</label>
+                        <input
+                            type="number"
+                            name="row_tol"
+                            id="row_tol"
+                            x-model="rowTol"
+                            min="0"
+                            max="10"
+                            class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary focus:ring-primary sm:text-sm border px-3 py-2"
+                        >
+                        <p class="mt-1 text-xs text-gray-500">Tolerance for detecting rows (higher = more lenient)</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Submit Button -->
+            <div class="mt-6">
+                <button
+                    type="submit"
+                    :disabled="!selectedFile || isUploading"
+                    :class="!selectedFile || isUploading ? 'bg-gray-300 cursor-not-allowed' : 'bg-primary hover:bg-blue-600'"
+                    class="w-full flex justify-center items-center py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary transition-colors"
+                >
+                    <template x-if="!isUploading">
+                        <span>Extract Tables</span>
+                    </template>
+                    <template x-if="isUploading">
+                        <span class="flex items-center">
+                            <svg class="animate-spin -ml-1 mr-3 h-5 w-5 text-white" fill="none" viewBox="0 0 24 24">
+                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                            Processing...
+                        </span>
+                    </template>
+                </button>
+            </div>
+        </form>
+
+        <!-- Progress Section -->
+        <div x-show="isUploading || taskId" x-cloak class="mt-6">
+            <div class="bg-gray-50 rounded-lg p-4">
+                <div class="flex items-center justify-between mb-2">
+                    <span class="text-sm font-medium text-gray-700" x-text="statusMessage"></span>
+                    <span class="text-sm text-gray-500" x-text="progress + '%'"></span>
+                </div>
+                <div class="w-full bg-gray-200 rounded-full h-2.5">
+                    <div
+                        class="bg-primary h-2.5 rounded-full transition-all duration-300"
+                        :style="'width: ' + progress + '%'"
+                    ></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Error Message -->
+        <div x-show="errorMessage" x-cloak class="mt-4 bg-red-50 border border-red-200 rounded-md p-4">
+            <div class="flex">
+                <svg class="h-5 w-5 text-red-400" fill="currentColor" viewBox="0 0 20 20">
+                    <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"/>
+                </svg>
+                <p class="ml-3 text-sm text-red-700" x-text="errorMessage"></p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Recent Uploads -->
+    {% if recent_reports %}
+    <div class="mt-8">
+        <h2 class="text-lg font-semibold text-gray-900 mb-4">Recent Uploads</h2>
+        <div class="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+            <ul class="divide-y divide-gray-200">
+                {% for report in recent_reports %}
+                <li>
+                    <a href="{% url 'report_detail' report.id %}" class="block hover:bg-gray-50 px-4 py-3">
+                        <div class="flex items-center justify-between">
+                            <div class="flex items-center space-x-3">
+                                <svg class="h-6 w-6 text-red-500" fill="currentColor" viewBox="0 0 20 20">
+                                    <path fill-rule="evenodd" d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4z" clip-rule="evenodd"/>
+                                </svg>
+                                <span class="text-sm font-medium text-gray-900">{{ report.name }}</span>
+                            </div>
+                            <span class="text-xs text-gray-500">{{ report.extracted.count }} tables</span>
+                        </div>
+                    </a>
+                </li>
+                {% endfor %}
+            </ul>
+        </div>
+    </div>
+    {% endif %}
+</div>
+
+<script>
+function uploadForm() {
+    return {
+        selectedFile: null,
+        isDragging: false,
+        isUploading: false,
+        taskId: null,
+        progress: 0,
+        statusMessage: 'Preparing...',
+        errorMessage: null,
+        startPage: 1,
+        endPage: -1,
+        showAdvanced: false,
+        camelotFlavor: 'auto',
+        mergeHeaders: true,
+        rowTol: 2,
+
+        handleFileSelect(event) {
+            const file = event.target.files[0];
+            if (file && file.type === 'application/pdf') {
+                this.selectedFile = file;
+                this.errorMessage = null;
+            } else {
+                this.errorMessage = 'Please select a valid PDF file';
+            }
+        },
+
+        handleDrop(event) {
+            this.isDragging = false;
+            const file = event.dataTransfer.files[0];
+            if (file && file.type === 'application/pdf') {
+                this.selectedFile = file;
+                this.$refs.fileInput.files = event.dataTransfer.files;
+                this.errorMessage = null;
+            } else {
+                this.errorMessage = 'Please select a valid PDF file';
+            }
+        },
+
+        clearFile() {
+            this.selectedFile = null;
+            this.$refs.fileInput.value = '';
+        },
+
+        formatFileSize(bytes) {
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+            return (bytes / 1048576).toFixed(1) + ' MB';
+        },
+
+        async submitForm() {
+            if (!this.selectedFile) return;
+
+            this.isUploading = true;
+            this.progress = 0;
+            this.statusMessage = 'Uploading file...';
+            this.errorMessage = null;
+
+            const formData = new FormData();
+            formData.append('document', this.selectedFile);
+            formData.append('start_page', this.startPage);
+            formData.append('end_page', this.endPage);
+            formData.append('camelot_flavor', this.camelotFlavor);
+            formData.append('merge_headers', this.mergeHeaders ? 'on' : 'off');
+            formData.append('row_tol', this.rowTol);
+
+            try {
+                const response = await fetch('{% url "upload_async" %}', {
+                    method: 'POST',
+                    body: formData,
+                    headers: {
+                        'X-CSRFToken': '{{ csrf_token }}'
+                    }
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    this.taskId = data.task_id;
+                    this.progress = 20;
+                    this.statusMessage = 'Processing PDF...';
+                    this.pollTaskStatus();
+                } else {
+                    this.errorMessage = data.error || 'Upload failed';
+                    this.isUploading = false;
+                }
+            } catch (error) {
+                this.errorMessage = 'Network error. Please try again.';
+                this.isUploading = false;
+            }
+        },
+
+        async pollTaskStatus() {
+            if (!this.taskId) return;
+
+            try {
+                const response = await fetch(`/task-status/${this.taskId}/`);
+                const data = await response.json();
+
+                if (data.state === 'PROGRESS') {
+                    this.progress = Math.max(20, Math.min(90, data.progress.current));
+                    this.statusMessage = data.progress.status || 'Processing...';
+                    setTimeout(() => this.pollTaskStatus(), 1000);
+                } else if (data.state === 'SUCCESS') {
+                    this.progress = 100;
+                    this.statusMessage = 'Complete!';
+                    // Redirect to report detail page
+                    setTimeout(() => {
+                        window.location.href = `/reports/${data.result.report_id}/`;
+                    }, 500);
+                } else if (data.state === 'FAILURE') {
+                    this.errorMessage = data.error || 'Extraction failed';
+                    this.isUploading = false;
+                } else {
+                    // Pending or other state
+                    setTimeout(() => this.pollTaskStatus(), 1000);
+                }
+            } catch (error) {
+                this.errorMessage = 'Failed to check status';
+                this.isUploading = false;
+            }
+        }
+    }
+}
+</script>
+{% endblock %}

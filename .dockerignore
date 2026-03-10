@@ -1,0 +1,43 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+.env
+.venv
+env/
+venv/
+ENV/
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# Database
+*.sqlite3
+db.sqlite3
+
+# Documents (will be mounted as volume)
+documents/*
+!documents/.gitkeep
+
+# Claude
+.claude/
+
+# Docker
+Dockerfile
+docker-compose*.yml
+.dockerignore
+
+# Misc
+*.log
+*.pot
+*.pyc
+.DS_Store
