@@ -66,6 +66,9 @@ pymupdf>=1.23.0
 # pdfplumber for text-based table extraction
 pdfplumber>=0.10.0
 
+# img2table for vision-based table detection (CPU, no GPU required)
+img2table>=1.2.0
+
 # Testing
 pytest>=7.0.0
 pytest-django>=4.5.0
