@@ -365,3 +365,62 @@ Updated type annotations in `table_extract.py`:
 
 ---
 
+## CR-009: Consolidate flavor auto-detection logic
+**Decision: SKIP (Different contexts require different approaches)**
+**Date:** 2026-03-11
+
+### Analysis
+The code review identified similar logic for comparing lattice vs stream extraction results in:
+- `detect_tables()` in `predict_table.py` (lines 300-340)
+- `MultiExtractor` in `multi_extractor.py` (lines 88-153)
+
+### Findings
+
+**Implementation 1: `detect_tables()` (YOLO pipeline)**
+```python
+# Lines 300-340
+actual_flavor = detect_table_type_from_array(img)  # Image-based detection
+result_primary, acc_primary = run_camelot_extraction(actual_flavor, ...)
+alt_flavor = 'stream' if actual_flavor == 'lattice' else 'lattice'
+result_alt, acc_alt = run_camelot_extraction(alt_flavor, ...)
+
+# Pick better result with +5% threshold bias toward detected flavor
+if acc_alt > acc_primary + 5:
+    output_camelot = result_alt
+```
+
+**Implementation 2: `MultiExtractor` (born-digital pipeline)**
+```python
+# Uses ExtractionScorer with 5 weighted metrics
+self._extractors = [
+    CamelotExtractor(flavor='lattice'),
+    CamelotExtractor(flavor='stream'),
+    PdfplumberExtractor(),
+]
+scored_results = self._scorer.score_all(candidate_results)
+best_results = [result for result, score in scored_results[:max_tables]]
+```
+
+### Key Differences
+
+| Aspect | detect_tables() | MultiExtractor |
+|--------|-----------------|----------------|
+| **Context** | YOLO pipeline (scanned PDFs) | Born-digital PDFs |
+| **Detection** | Image-based (`detect_table_type_from_array`) | None (runs all) |
+| **Scoring** | Camelot accuracy from parsing_report | ExtractionScorer (5 metrics) |
+| **Bias** | +5% threshold toward detected flavor | No bias |
+| **Extractors** | Camelot only (lattice vs stream) | Camelot + pdfplumber |
+
+### Why Consolidation Would Be Harmful
+
+1. **Unwanted coupling**: YOLO and born-digital pipelines are intentionally separate paths with different requirements
+2. **Different scoring needs**: Image-based detection provides useful prior information that MultiExtractor doesn't have
+3. **Different extractor sets**: Adding pdfplumber to the YOLO path would slow scanned PDF processing unnecessarily
+4. **Context-specific optimizations**: The +5% bias toward detected flavor leverages image analysis; removing it would degrade YOLO path quality
+5. **No meaningful code reduction**: The common "compare and select" pattern is trivial; the actual logic is different
+
+### Conclusion
+The shared concept is "compare extraction results and pick the best one," but the implementations are appropriately tailored to their contexts. This is **acceptable duplication** that improves code clarity and maintains separation of concerns.
+
+---
+
