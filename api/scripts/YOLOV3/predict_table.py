@@ -824,8 +824,7 @@ def extract_tables_direct(file_path: str, page_number: int, output_type: str,
 
 
 def extract_tables_vision(file_path: str, page_number: int, output_type: str,
-                          report_db, extract_dir: dict, flavor: str = 'auto',
-                          row_tol: int = 2, strip_text: str = '\n',
+                          report_db, extract_dir: dict, strip_text: str = '\n',
                           merge_headers: bool = True,
                           page_type: Optional[str] = None) -> list:
     """
@@ -838,14 +837,16 @@ def extract_tables_vision(file_path: str, page_number: int, output_type: str,
     This function maintains backward compatibility by calling the readonly
     extraction function followed by the save function.
 
+    Note: Unlike extract_tables_direct, this function does not accept flavor
+    or row_tol parameters because img2table uses different configuration
+    (implicit_rows, borderless_tables, min_confidence).
+
     Args:
         file_path: Path to PDF file
         page_number: Page number to process
         output_type: Output format type
         report_db: Database report instance
         extract_dir: Dictionary of extraction directories
-        flavor: Unused for vision extraction (kept for API compatibility)
-        row_tol: Unused for vision extraction (kept for API compatibility)
         strip_text: Characters to strip from cell text
         merge_headers: Whether to merge fragmented multi-row headers
         page_type: Classification of source page ('born_digital', 'scanned', 'mixed')
