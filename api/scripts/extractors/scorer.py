@@ -103,7 +103,7 @@ class ExtractionScorer:
             return 0.0
 
         # Calculate individual scores
-        confidence = result.confidence if result.confidence else 0.5
+        confidence = result.confidence if result.confidence is not None else 0.5
         coverage = self._score_coverage(df, page_text)
         regularity = self._score_regularity(df)
         numeric = self._score_numeric_integrity(df)

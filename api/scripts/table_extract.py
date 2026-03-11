@@ -243,9 +243,12 @@ def deduplicate_by_bbox(scored_results: list, iou_threshold: float = 0.5) -> lis
         if len(page_selected) > 1:
             # Check if results look like the same table (similar shape)
             shapes = [(r.dataframe.shape, r, s) for r, s, _ in page_selected]
-            # If shapes are very similar (within 2 rows), likely same table
-            base_rows = shapes[0][0][0]
-            similar_shapes = all(abs(s[0][0] - base_rows) <= 2 for s in shapes)
+            # If shapes are very similar (within 2 rows AND 2 columns), likely same table
+            base_rows, base_cols = shapes[0][0]
+            similar_shapes = all(
+                abs(s[0][0] - base_rows) <= 2 and abs(s[0][1] - base_cols) <= 2
+                for s in shapes
+            )
 
             if similar_shapes:
                 log.output('INFO', f'Page {page}: Similar tables from different extractors, keeping best score')

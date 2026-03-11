@@ -80,12 +80,13 @@ def build_structure_json(df, metadata: dict = None) -> dict:
 
 # %%
 def norm_pdf_page(pdf_file, pg):
-    pdf_doc = PdfReader(open(pdf_file, "rb"))
-    pdf_page = pdf_doc.pages[pg - 1]
-    pdf_page.cropbox.upper_left = (0, list(pdf_page.mediabox)[-1])
-    pdf_page.cropbox.lower_right = (list(pdf_page.mediabox)[-2], 0)
+    with open(pdf_file, "rb") as f:
+        pdf_doc = PdfReader(f)
+        pdf_page = pdf_doc.pages[pg - 1]
+        pdf_page.cropbox.upper_left = (0, list(pdf_page.mediabox)[-1])
+        pdf_page.cropbox.lower_right = (list(pdf_page.mediabox)[-2], 0)
 
-    return pdf_page
+        return pdf_page
 
 
 def pdf_page2img(pdf_file, pg, save_image=True):
