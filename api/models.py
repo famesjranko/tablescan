@@ -77,6 +77,21 @@ class Report(models.Model):
     Report database Class Model
     """
 
+    EXTRACTION_MODE_CHOICES = (
+        ("auto", "Automatic"),
+        ("manual", "Manual"),
+        ("review", "Review"),
+    )
+
+    EXTRACTION_STATUS_CHOICES = (
+        ("uploaded", "Uploaded"),
+        ("detecting", "Detecting"),
+        ("pending_review", "Pending Review"),
+        ("extracting", "Extracting"),
+        ("completed", "Completed"),
+        ("failed", "Failed"),
+    )
+
     name = models.CharField(max_length=100, null=True)
     document = models.FileField(storage=MyStorage(), upload_to=upload_path)
     zip_csv = models.FileField(null=True)
@@ -84,6 +99,18 @@ class Report(models.Model):
     total_pages = models.PositiveIntegerField(null=True, blank=True)
     start_page = models.IntegerField(default=1)
     end_page = models.IntegerField(default=-1)
+    extraction_mode = models.CharField(
+        max_length=10,
+        choices=EXTRACTION_MODE_CHOICES,
+        default="auto",
+        help_text="Extraction workflow: auto, manual, or review",
+    )
+    extraction_status = models.CharField(
+        max_length=20,
+        choices=EXTRACTION_STATUS_CHOICES,
+        default="uploaded",
+        help_text="Current processing state of the report",
+    )
     owner = models.ForeignKey(
         User,
         on_delete=models.CASCADE,
