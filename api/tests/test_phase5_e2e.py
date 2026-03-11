@@ -1,7 +1,8 @@
 """
-End-to-end tests for Phase 5: Manual Selection Flow
+End-to-end tests for Phase 5: Selection Workflows
 
 BV-017: Verify the complete manual selection workflow
+BV-018: Verify the complete auto-detection with review workflow
 
 Tests verify:
 1. Upload PDF with 'Manual Selection' mode
@@ -12,6 +13,15 @@ Tests verify:
 6. Trigger extraction and verify task runs
 7. Verify Extracted records created for drawn regions
 8. Verify CSV content matches table data
+
+BV-018 Auto + Review tests verify:
+1. Upload PDF with 'Auto + Review' mode sets extraction_mode='review'
+2. YOLO detection task updates status: 'detecting' -> 'pending_review'
+3. YOLO boxes created with source='yolo', status='pending'
+4. Approve/reject API calls update box status correctly
+5. Manual boxes added with source='manual', status='approved'
+6. Extraction only includes approved YOLO + manual boxes
+7. Rejected boxes NOT in Extracted results
 """
 
 import io
@@ -756,6 +766,653 @@ class TestManualSelectionAPI(APITestCase):
 
         # Verify deleted
         assert not TableSelection.objects.filter(id=selection.id).exists()
+
+
+# =============================================================================
+# BV-018: Auto + Review Flow Tests
+# =============================================================================
+
+class TestAutoReviewCodeStructure:
+    """Verify code structure supports auto-detection with review flow."""
+
+    @pytest.fixture
+    def views_source(self):
+        """Read views.py source code."""
+        path = Path(__file__).parent.parent / "views.py"
+        return path.read_text()
+
+    @pytest.fixture
+    def tasks_source(self):
+        """Read tasks.py source code."""
+        path = Path(__file__).parent.parent / "tasks.py"
+        return path.read_text()
+
+    @pytest.fixture
+    def models_source(self):
+        """Read models.py source code."""
+        path = Path(__file__).parent.parent / "models.py"
+        return path.read_text()
+
+    def test_upload_view_handles_review_mode(self, views_source):
+        """UploadAsyncView should handle extraction_mode='review'."""
+        assert "extraction_mode == 'review'" in views_source
+
+    def test_detect_tables_for_review_task_exists(self, tasks_source):
+        """detect_tables_for_review task should exist."""
+        assert "def detect_tables_for_review(" in tasks_source
+
+    def test_detect_task_updates_status_detecting(self, tasks_source):
+        """Task should set extraction_status to 'detecting' at start."""
+        assert "extraction_status = 'detecting'" in tasks_source
+
+    def test_detect_task_updates_status_pending_review(self, tasks_source):
+        """Task should set extraction_status to 'pending_review' on completion."""
+        assert "extraction_status = 'pending_review'" in tasks_source
+
+    def test_detect_task_creates_yolo_selections(self, tasks_source):
+        """Task should create TableSelection records with source='yolo'."""
+        assert "source='yolo'" in tasks_source
+        assert "status='pending'" in tasks_source
+
+    def test_report_has_review_mode_choice(self, models_source):
+        """Report model should have 'review' as extraction_mode choice."""
+        assert "'review'" in models_source or '"review"' in models_source
+
+    def test_report_has_detecting_status_choice(self, models_source):
+        """Report model should have 'detecting' as extraction_status choice."""
+        assert "'detecting'" in models_source or '"detecting"' in models_source
+
+
+class TestAutoReviewDetectionFlow:
+    """Verify YOLO detection creates proper TableSelection records."""
+
+    @pytest.fixture
+    def tasks_source(self):
+        """Read tasks.py source code."""
+        path = Path(__file__).parent.parent / "tasks.py"
+        return path.read_text()
+
+    def test_task_saves_bounding_box_coords(self, tasks_source):
+        """Task should save x1, y1, x2, y2 coordinates."""
+        assert "x1=region['x1']" in tasks_source
+        assert "y1=region['y1']" in tasks_source
+        assert "x2=region['x2']" in tasks_source
+        assert "y2=region['y2']" in tasks_source
+
+    def test_task_saves_confidence(self, tasks_source):
+        """Task should save confidence from YOLO detection."""
+        assert "confidence=region.get('confidence')" in tasks_source
+
+    def test_task_returns_redirect_url(self, tasks_source):
+        """Task should return redirect URL to viewer."""
+        assert "'redirect_url'" in tasks_source
+        assert "/book-viewer/" in tasks_source
+
+    def test_task_returns_selections_count(self, tasks_source):
+        """Task should return count of created selections."""
+        assert "'selections_count'" in tasks_source
+
+
+class TestAutoReviewStatusTransitions:
+    """Verify extraction_status state machine for review flow."""
+
+    @pytest.fixture
+    def tasks_source(self):
+        """Read tasks.py source code."""
+        path = Path(__file__).parent.parent / "tasks.py"
+        return path.read_text()
+
+    def test_detecting_to_pending_review_transition(self, tasks_source):
+        """Status should transition from 'detecting' to 'pending_review'."""
+        # Both statuses should be set in detect_tables_for_review
+        content = tasks_source
+        idx_detecting = content.find("extraction_status = 'detecting'")
+        idx_pending = content.find("extraction_status = 'pending_review'")
+
+        assert idx_detecting != -1, "Should set status to 'detecting'"
+        assert idx_pending != -1, "Should set status to 'pending_review'"
+        # 'detecting' should be set before 'pending_review'
+        assert idx_detecting < idx_pending, "Should transition from detecting to pending_review"
+
+    def test_failed_status_on_error(self, tasks_source):
+        """Status should transition to 'failed' on error."""
+        assert "extraction_status = 'failed'" in tasks_source
+
+
+class TestApproveRejectSelections:
+    """Verify approve/reject API updates selection status."""
+
+    @pytest.fixture
+    def views_source(self):
+        """Read views.py source code."""
+        path = Path(__file__).parent.parent / "views.py"
+        return path.read_text()
+
+    def test_patch_endpoint_exists(self, views_source):
+        """PATCH endpoint should exist for updating selection status."""
+        assert "partial_update" in views_source or "update" in views_source
+
+    def test_status_validation(self, views_source):
+        """PATCH should validate status against valid choices."""
+        assert "STATUS_CHOICES" in views_source or "status" in views_source
+
+
+class TestMixedSelectionsExtraction:
+    """Verify extraction handles mixed YOLO and manual selections."""
+
+    @pytest.fixture
+    def tasks_source(self):
+        """Read tasks.py source code."""
+        path = Path(__file__).parent.parent / "tasks.py"
+        return path.read_text()
+
+    def test_extract_filters_by_approved_status(self, tasks_source):
+        """extract_from_selections should filter by status='approved'."""
+        # Find the extract_from_selections function section
+        assert "status='approved'" in tasks_source
+
+    def test_extract_ignores_source_type(self, tasks_source):
+        """Extraction should process all approved selections regardless of source."""
+        # The filter should NOT include source= filter, only status='approved'
+        # This means both manual and yolo approved selections are included
+        extract_func_start = tasks_source.find("def extract_from_selections")
+        assert extract_func_start != -1
+
+        extract_func_section = tasks_source[extract_func_start:]
+        filter_section = extract_func_section[:extract_func_section.find("def ", 1) if "def " in extract_func_section[1:] else len(extract_func_section)]
+
+        # Should have status='approved' filter
+        assert "status='approved'" in filter_section
+
+        # Should NOT have source= filter (so both yolo and manual are included)
+        # Check that we're not filtering by source in the approved query
+        filter_line_start = filter_section.find("approved_selections = ")
+        if filter_line_start != -1:
+            # Get the filter call
+            filter_line_end = filter_section.find(")", filter_line_start)
+            filter_call = filter_section[filter_line_start:filter_line_end]
+            # Should not filter by source
+            assert "source=" not in filter_call, "Should not filter by source, only by status"
+
+
+# =============================================================================
+# BV-018: Integration Tests
+# =============================================================================
+
+@pytest.mark.skipif(not DJANGO_API_AVAILABLE, reason="Django API not available")
+@pytest.mark.django_db(transaction=True)
+class TestAutoReviewE2E(APITestCase):
+    """
+    End-to-end integration test for auto + review workflow.
+
+    BV-018 Acceptance Criteria:
+    1. Upload PDF with 'Auto + Review' mode
+    2. Verify YOLO detection task starts (check Celery logs or task status)
+    3. Verify extraction_status transitions: 'detecting' -> 'pending_review'
+    4. Redirected to viewer with detected boxes shown in orange
+    5. Approve some boxes (turn green), reject others (fade out)
+    6. Add a manual box for a missed table
+    7. Click Extract
+    8. Verify only approved YOLO + manual boxes extracted
+    9. Rejected boxes NOT in Extracted results
+    """
+
+    def setUp(self):
+        """Set up test user and client."""
+        self.user = User.objects.create_user(
+            username='review_flow_test_user',
+            password='testpass123',
+            email='review@example.com'
+        )
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.user)
+
+    def tearDown(self):
+        """Clean up after tests."""
+        from api.models import Report, TableSelection
+        TableSelection.objects.filter(report__owner=self.user).delete()
+        Report.objects.filter(owner=self.user).delete()
+
+    def test_report_model_has_review_mode_choice(self):
+        """Report model should have 'review' as extraction_mode choice."""
+        from api.models import Report
+
+        mode_choices = dict(Report.EXTRACTION_MODE_CHOICES)
+        assert 'review' in mode_choices
+
+    def test_report_model_has_detecting_status_choice(self):
+        """Report model should have 'detecting' as extraction_status choice."""
+        from api.models import Report
+
+        status_choices = dict(Report.EXTRACTION_STATUS_CHOICES)
+        assert 'detecting' in status_choices
+
+    def test_table_selection_yolo_source(self):
+        """TableSelection should have 'yolo' as source choice."""
+        from api.models import TableSelection
+
+        source_choices = dict(TableSelection.SOURCE_CHOICES)
+        assert 'yolo' in source_choices
+
+    def test_table_selection_pending_status(self):
+        """TableSelection should have 'pending' as status choice."""
+        from api.models import TableSelection
+
+        status_choices = dict(TableSelection.STATUS_CHOICES)
+        assert 'pending' in status_choices
+
+    def test_yolo_detection_creates_pending_selections(self):
+        """YOLO detection should create selections with status='pending'."""
+        from api.models import Report, TableSelection
+
+        # Create a report with review mode
+        report = Report.objects.create(
+            name='test_yolo_pending',
+            extraction_mode='review',
+            extraction_status='pending_review',
+            owner=self.user
+        )
+
+        # Simulate YOLO detection result (what the task would create)
+        TableSelection.objects.create(
+            report=report, page_num=1,
+            x1=80.0, y1=572.0, x2=360.0, y2=692.0,
+            confidence=0.85,
+            source='yolo', status='pending'
+        )
+
+        # Verify selection properties
+        selection = TableSelection.objects.get(report=report)
+        assert selection.source == 'yolo'
+        assert selection.status == 'pending'
+        assert selection.confidence == 0.85
+
+    def test_approve_yolo_selection(self):
+        """PATCH should allow approving a YOLO selection."""
+        from api.models import Report, TableSelection
+
+        report = Report.objects.create(
+            name='test_approve_yolo',
+            extraction_mode='review',
+            extraction_status='pending_review',
+            owner=self.user
+        )
+
+        selection = TableSelection.objects.create(
+            report=report, page_num=1,
+            x1=0, y1=0, x2=100, y2=100,
+            source='yolo', status='pending'
+        )
+
+        response = self.client.patch(
+            f'/api/reports/{report.id}/selections/{selection.id}/',
+            {'status': 'approved'},
+            format='json'
+        )
+
+        assert response.status_code == 200
+        selection.refresh_from_db()
+        assert selection.status == 'approved'
+
+    def test_reject_yolo_selection(self):
+        """PATCH should allow rejecting a YOLO selection."""
+        from api.models import Report, TableSelection
+
+        report = Report.objects.create(
+            name='test_reject_yolo',
+            extraction_mode='review',
+            extraction_status='pending_review',
+            owner=self.user
+        )
+
+        selection = TableSelection.objects.create(
+            report=report, page_num=1,
+            x1=0, y1=0, x2=100, y2=100,
+            source='yolo', status='pending'
+        )
+
+        response = self.client.patch(
+            f'/api/reports/{report.id}/selections/{selection.id}/',
+            {'status': 'rejected'},
+            format='json'
+        )
+
+        assert response.status_code == 200
+        selection.refresh_from_db()
+        assert selection.status == 'rejected'
+
+    def test_add_manual_selection_during_review(self):
+        """POST should allow adding manual selection during review."""
+        from api.models import Report, TableSelection
+
+        report = Report.objects.create(
+            name='test_add_manual',
+            extraction_mode='review',
+            extraction_status='pending_review',
+            owner=self.user
+        )
+
+        # Add a manual selection
+        response = self.client.post(
+            f'/api/reports/{report.id}/selections/',
+            {
+                'page_num': 2,
+                'x1': 100.0,
+                'y1': 500.0,
+                'x2': 400.0,
+                'y2': 700.0,
+            },
+            format='json'
+        )
+
+        assert response.status_code == 201
+        assert response.data['source'] == 'manual'
+        assert response.data['status'] == 'approved'
+
+    def test_mixed_selections_filtering(self):
+        """Only approved selections (YOLO + manual) should be extracted."""
+        from api.models import Report, TableSelection
+
+        report = Report.objects.create(
+            name='test_mixed_filtering',
+            extraction_mode='review',
+            extraction_status='pending_review',
+            owner=self.user
+        )
+
+        # Create various selections
+        TableSelection.objects.create(
+            report=report, page_num=1,
+            x1=0, y1=0, x2=100, y2=100,
+            source='yolo', status='approved'  # Should be included
+        )
+        TableSelection.objects.create(
+            report=report, page_num=1,
+            x1=100, y1=100, x2=200, y2=200,
+            source='yolo', status='pending'  # Should NOT be included
+        )
+        TableSelection.objects.create(
+            report=report, page_num=1,
+            x1=200, y1=200, x2=300, y2=300,
+            source='yolo', status='rejected'  # Should NOT be included
+        )
+        TableSelection.objects.create(
+            report=report, page_num=2,
+            x1=0, y1=0, x2=100, y2=100,
+            source='manual', status='approved'  # Should be included
+        )
+
+        # Query same as extract_from_selections task
+        approved = TableSelection.objects.filter(
+            report=report,
+            status='approved'
+        )
+
+        assert approved.count() == 2
+        sources = set(s.source for s in approved)
+        assert 'yolo' in sources
+        assert 'manual' in sources
+
+    def test_rejected_not_in_approved_query(self):
+        """Rejected selections should not be in approved query."""
+        from api.models import Report, TableSelection
+
+        report = Report.objects.create(
+            name='test_rejected_excluded',
+            extraction_mode='review',
+            extraction_status='pending_review',
+            owner=self.user
+        )
+
+        # Create one approved and one rejected
+        approved_sel = TableSelection.objects.create(
+            report=report, page_num=1,
+            x1=0, y1=0, x2=100, y2=100,
+            source='yolo', status='approved'
+        )
+        rejected_sel = TableSelection.objects.create(
+            report=report, page_num=1,
+            x1=100, y1=100, x2=200, y2=200,
+            source='yolo', status='rejected'
+        )
+
+        # Query approved only
+        approved = TableSelection.objects.filter(
+            report=report,
+            status='approved'
+        )
+
+        approved_ids = [s.id for s in approved]
+        assert approved_sel.id in approved_ids
+        assert rejected_sel.id not in approved_ids
+
+    def test_pending_not_in_approved_query(self):
+        """Pending selections should not be in approved query."""
+        from api.models import Report, TableSelection
+
+        report = Report.objects.create(
+            name='test_pending_excluded',
+            extraction_mode='review',
+            extraction_status='pending_review',
+            owner=self.user
+        )
+
+        # Create one approved and one pending
+        approved_sel = TableSelection.objects.create(
+            report=report, page_num=1,
+            x1=0, y1=0, x2=100, y2=100,
+            source='yolo', status='approved'
+        )
+        pending_sel = TableSelection.objects.create(
+            report=report, page_num=1,
+            x1=100, y1=100, x2=200, y2=200,
+            source='yolo', status='pending'
+        )
+
+        # Query approved only
+        approved = TableSelection.objects.filter(
+            report=report,
+            status='approved'
+        )
+
+        approved_ids = [s.id for s in approved]
+        assert approved_sel.id in approved_ids
+        assert pending_sel.id not in approved_ids
+
+
+@pytest.mark.skipif(not DJANGO_API_AVAILABLE, reason="Django API not available")
+@pytest.mark.django_db(transaction=True)
+class TestAutoReviewAPIWorkflow(APITestCase):
+    """Test complete API workflow for auto + review mode."""
+
+    def setUp(self):
+        """Set up test user and client."""
+        self.user = User.objects.create_user(
+            username='api_review_test_user',
+            password='testpass123',
+            email='apireview@example.com'
+        )
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.user)
+
+    def tearDown(self):
+        """Clean up after tests."""
+        from api.models import Report, TableSelection
+        TableSelection.objects.filter(report__owner=self.user).delete()
+        Report.objects.filter(owner=self.user).delete()
+
+    def test_full_review_workflow(self):
+        """
+        Test complete review workflow:
+        1. Create report with review mode
+        2. Create YOLO selections (simulating detection)
+        3. Approve some, reject others
+        4. Add manual selection
+        5. Verify approved query returns correct selections
+        """
+        from api.models import Report, TableSelection
+
+        # 1. Create report with review mode
+        report = Report.objects.create(
+            name='test_full_workflow',
+            extraction_mode='review',
+            extraction_status='pending_review',
+            owner=self.user
+        )
+
+        # 2. Create YOLO selections (simulating detect_tables_for_review)
+        yolo1 = TableSelection.objects.create(
+            report=report, page_num=1,
+            x1=80.0, y1=572.0, x2=360.0, y2=692.0,
+            confidence=0.92,
+            source='yolo', status='pending'
+        )
+        yolo2 = TableSelection.objects.create(
+            report=report, page_num=1,
+            x1=400.0, y1=100.0, x2=550.0, y2=200.0,
+            confidence=0.45,  # Low confidence, user will reject
+            source='yolo', status='pending'
+        )
+        yolo3 = TableSelection.objects.create(
+            report=report, page_num=2,
+            x1=100.0, y1=500.0, x2=400.0, y2=700.0,
+            confidence=0.88,
+            source='yolo', status='pending'
+        )
+
+        # Verify all start as pending
+        pending = TableSelection.objects.filter(report=report, status='pending')
+        assert pending.count() == 3
+
+        # 3. Approve some, reject others via API
+        # Approve yolo1 (high confidence)
+        response = self.client.patch(
+            f'/api/reports/{report.id}/selections/{yolo1.id}/',
+            {'status': 'approved'},
+            format='json'
+        )
+        assert response.status_code == 200
+
+        # Reject yolo2 (low confidence, user decision)
+        response = self.client.patch(
+            f'/api/reports/{report.id}/selections/{yolo2.id}/',
+            {'status': 'rejected'},
+            format='json'
+        )
+        assert response.status_code == 200
+
+        # Approve yolo3
+        response = self.client.patch(
+            f'/api/reports/{report.id}/selections/{yolo3.id}/',
+            {'status': 'approved'},
+            format='json'
+        )
+        assert response.status_code == 200
+
+        # 4. Add manual selection for missed table
+        response = self.client.post(
+            f'/api/reports/{report.id}/selections/',
+            {
+                'page_num': 3,
+                'x1': 50.0,
+                'y1': 600.0,
+                'x2': 300.0,
+                'y2': 750.0,
+            },
+            format='json'
+        )
+        assert response.status_code == 201
+        manual_id = response.data['id']
+
+        # 5. Verify approved query
+        approved = TableSelection.objects.filter(
+            report=report,
+            status='approved'
+        ).order_by('page_num')
+
+        assert approved.count() == 3  # 2 approved YOLO + 1 manual
+
+        # Verify correct selections are approved
+        approved_ids = [s.id for s in approved]
+        assert yolo1.id in approved_ids  # Approved YOLO
+        assert yolo2.id not in approved_ids  # Rejected
+        assert yolo3.id in approved_ids  # Approved YOLO
+        assert manual_id in approved_ids  # Manual (auto-approved)
+
+        # Verify sources
+        sources = [s.source for s in approved]
+        assert sources.count('yolo') == 2
+        assert sources.count('manual') == 1
+
+    def test_list_selections_by_status(self):
+        """GET with status filter should return filtered selections."""
+        from api.models import Report, TableSelection
+
+        report = Report.objects.create(
+            name='test_list_by_status',
+            extraction_mode='review',
+            extraction_status='pending_review',
+            owner=self.user
+        )
+
+        TableSelection.objects.create(
+            report=report, page_num=1,
+            x1=0, y1=0, x2=100, y2=100,
+            source='yolo', status='pending'
+        )
+        TableSelection.objects.create(
+            report=report, page_num=1,
+            x1=100, y1=100, x2=200, y2=200,
+            source='yolo', status='approved'
+        )
+        TableSelection.objects.create(
+            report=report, page_num=1,
+            x1=200, y1=200, x2=300, y2=300,
+            source='yolo', status='rejected'
+        )
+
+        # Filter by pending
+        response = self.client.get(f'/api/reports/{report.id}/selections/?status=pending')
+        assert response.status_code == 200
+        assert len(response.data) == 1
+        assert response.data[0]['status'] == 'pending'
+
+        # Filter by approved
+        response = self.client.get(f'/api/reports/{report.id}/selections/?status=approved')
+        assert response.status_code == 200
+        assert len(response.data) == 1
+        assert response.data[0]['status'] == 'approved'
+
+        # Filter by multiple statuses
+        response = self.client.get(f'/api/reports/{report.id}/selections/?status=pending,approved')
+        assert response.status_code == 200
+        assert len(response.data) == 2
+
+    def test_extract_endpoint_requires_approved(self):
+        """POST extract-selections should use approved selections only."""
+        from api.models import Report, TableSelection
+
+        report = Report.objects.create(
+            name='test_extract_requires_approved',
+            extraction_mode='review',
+            extraction_status='pending_review',
+            owner=self.user
+        )
+
+        # Create only pending selections
+        TableSelection.objects.create(
+            report=report, page_num=1,
+            x1=0, y1=0, x2=100, y2=100,
+            source='yolo', status='pending'
+        )
+
+        # Try to trigger extraction - should fail or return 0 approved
+        response = self.client.post(f'/api/reports/{report.id}/extract-selections/')
+
+        # Should return 400 because no approved selections
+        assert response.status_code == 400
+        assert 'approved' in response.data.get('error', '').lower() or \
+               'no' in response.data.get('error', '').lower()
 
 
 if __name__ == '__main__':

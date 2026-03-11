@@ -108,3 +108,147 @@ Started: Wed Mar 11 08:12:09 PM AEDT 2026
 - Returns 400 if no approved selections found
 - Uses existing TaskStatusView at /task-status/<task_id>/ for polling
 
+## BV-009: Add book viewer Django view and URL [COMPLETE]
+- Added BookViewerView class to api/views.py
+- Uses LoginRequiredMixin and View (standard Django CBV pattern)
+- URL pattern: /reports/<int:pk>/viewer/ maps to BookViewerView
+- Verifies report ownership: returns 403 if report.owner != request.user
+- Returns 404 for invalid report ID via get_object_or_404()
+- Passes report object to template context ('reports/book_viewer.html')
+- CSRF token automatically available in Django templates
+- Commit: 8361f48
+
+## BV-010: Create book viewer template [COMPLETE]
+- Created templates/reports/book_viewer.html extending base.html
+- PDF.js 4.4.168 via CDN (ES module import with worker)
+- Two-page spread layout with left-page-container and right-page-container
+- Navigation controls: prevSpread/nextSpread with disabled states
+- Mode toggle: View and Select Tables modes
+- Zoom controls: +/- buttons with 25% increments (50%-200% range)
+- Page numbers displayed below each page canvas
+- Selection panel: shows all selections with count, status indicators
+- Loading spinner with "Loading PDF..." message
+- Error message section with red styling for load failures
+- CSRF token in meta tag: <meta name="csrf-token" content="{{ csrf_token }}">
+- Alpine.js state management for reactive updates
+- Selection drawing with mouse events in Select Tables mode
+- API integration: loads/creates/deletes selections via fetch()
+- Commit: b475aee
+
+## BV-011: Create book viewer Alpine.js component [COMPLETE]
+- Created static/js/book-viewer.js with createBookViewer() function
+- PDF.js 4.x ES module import pattern
+- Renders two pages side-by-side with currentSpread state
+- Handles single-page PDFs and odd page counts (clears right canvas)
+- Prev/next navigation updates spread and re-renders
+- Added page number input field with validation (1 to totalPages)
+- Stores PDF dimensions in canvas.dataset (pdfWidth, pdfHeight, pageNum, scale)
+- Zoom controls scale viewport (50%-200% / 0.5x-2.0x range)
+- Loading state indicator during page render (renderingPages)
+- Render errors displayed with retry option (renderError)
+- Updated template to import external JS file
+- Commit: c91fbce
+
+## BV-012: Create bounding box manager component [COMPLETE]
+- Created static/js/bbox-manager.js with BoundingBoxManager class
+- Overlay canvas positioned absolutely on top of each PDF page canvas
+- Loads existing selections from API on page render (loadSelections method)
+- Color-codes boxes: orange (#F59E0B) for YOLO pending, green (#10B981) for approved, blue (#3B82F6) for manual
+- Mouse events for drawing new boxes (mousedown, mousemove, mouseup)
+- Ignores boxes smaller than 20x20 canvas pixels (accidental clicks filter)
+- Click existing box to select it (highlight with dashed border + show controls)
+- Coordinate conversion: canvasToPdf() and pdfToCanvas() functions
+- canvasToPdf() applies Y-axis flip: pdf_y = page_height - canvas_y (PDF uses bottom-left origin)
+- pdfToCanvas() applies inverse Y-axis flip: canvas_y = page_height - pdf_y
+- After drawing, shows confirm/cancel buttons before saving to API
+- Pressing Escape or clicking cancel removes the pending box without API call
+- Saves new selections to API on confirm with CSRF token from meta tag
+- Shows error toast if API save fails with retry option
+- Additional methods: updateStatus(), deleteSelection(), selectBox(), clearSelection()
+- Proper cleanup via destroy() method
+- Commit: c2dc93a
+
+## BV-013: Add review controls for YOLO detections [COMPLETE]
+- Added approve/reject icons on YOLO pending boxes (appear on hover)
+- Icons positioned at top-right of selection overlay with opacity transition
+- Added approve/reject buttons in selection panel list for YOLO pending items
+- Added updateSelectionStatus(selId, status) method with PATCH API call
+- CSRF token included via X-CSRFToken header
+- Box color updates immediately on status change (Alpine.js reactive)
+- Rejected boxes styled with opacity: 0.4 and red border
+- Error toast with dismiss button and auto-dismiss after 5 seconds
+- Uses safe DOM methods (no innerHTML with untrusted content)
+- Commit: 192f64a
+
+## BV-014: Add extract button and extraction flow to viewer [COMPLETE]
+- Added extraction state variables (extracting, extractProgress, extractError, extractTaskId) to Alpine component
+- Added "Extract Selected Tables (N)" button in selection panel header
+- Button shows count of approved selections and is disabled when count is 0
+- startExtraction() triggers POST to /api/reports/{id}/extract-selections/
+- pollTaskStatus() polls /task-status/{taskId}/ every 1s (max 5 minutes)
+- Extraction overlay with spinner and progress bar during processing
+- Progress bar updates based on task progress state from Celery
+- Error modal with retry and close buttons on failure
+- Redirects to /reports/{id}/ on successful extraction completion
+- Commit: 534c682
+
+## BV-015: Add extraction mode selector to upload page [COMPLETE]
+- Added radio button group to upload.html with three extraction modes
+- Automatic (default): AI detects and extracts tables, results appear immediately
+- Auto + Review: AI detects tables, user approves/adjusts in viewer before extraction
+- Manual Selection: User draws table regions in viewer, best for complex layouts
+- Each option has descriptive text explaining the workflow
+- extraction_mode sent in form submission and saved to Report model
+- UploadAsyncView handles different modes:
+  - auto: uses existing extract_tables_task, redirects to results
+  - review: triggers detect_tables_for_review task, polls status, redirects to viewer when complete
+  - manual: sets extraction_status='pending_review', redirects immediately to viewer
+- Progress indicator shows appropriate status message ("Detecting tables..." for review mode)
+- Commit: 6d7904f
+
+## BV-016: Add Open Viewer link to report detail page [COMPLETE]
+- Added "Open Book Viewer" button to reports/detail.html action buttons group
+- Styled with bg-primary (blue) matching other primary action buttons
+- Uses book icon SVG for visual consistency
+- Links to {% url 'book_viewer' report.id %}
+- Visible for all reports regardless of extraction_mode
+- Positioned between "Original PDF" and "Download All CSV" buttons
+- Commit: 25411bd
+
+## BV-017: End-to-end test: Manual selection flow [COMPLETE]
+- Created api/tests/test_phase5_e2e.py with 36 comprehensive tests
+- Tests cover the complete manual selection workflow:
+  - Code structure verification (views, tasks, models)
+  - API endpoint tests for selections CRUD
+  - Serializer default behavior (source='manual', status='approved')
+  - Integration tests with Django test client
+  - Coordinate transformation tests (canvasToPdf, pdfToCanvas)
+  - Book viewer template verification
+- Verified acceptance criteria:
+  - Upload with extraction_mode='manual' sets extraction_status='pending_review'
+  - Manual mode creates no YOLO boxes (blank overlay)
+  - Manual selections default to source='manual', status='approved'
+  - extract_from_selections filters only approved selections
+  - MultiExtractor accepts table_areas parameter
+- All 36 tests pass
+- Commit: 08a710c
+
+## BV-018: End-to-end test: Auto + Review flow [COMPLETE]
+- Extended api/tests/test_phase5_e2e.py with 31 additional tests (67 total)
+- Tests cover the complete Auto + Review workflow:
+  - Code structure: detect_tables_for_review task, review mode handling
+  - Status transitions: 'detecting' -> 'pending_review'
+  - YOLO detection creates selections with source='yolo', status='pending'
+  - Approve/reject API (PATCH) updates status correctly
+  - Manual selections added during review with source='manual', status='approved'
+  - Extraction filters by status='approved' (includes YOLO approved + manual)
+  - Rejected/pending boxes NOT included in extraction
+- Fixed serializer bug: PATCH was overwriting source='yolo' with 'manual'
+  - Changed validate() to only set defaults on create (self.instance is None)
+- Verified acceptance criteria:
+  - Auto + Review mode uses extraction_mode='review'
+  - YOLO detection task transitions: detecting -> pending_review
+  - Approved YOLO + manual boxes extracted together
+  - Rejected boxes excluded from extraction results
+- All 67 tests pass
+

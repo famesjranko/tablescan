@@ -182,15 +182,18 @@ class TableSelectionSerializer(serializers.ModelSerializer):
             if page_num < 1:
                 raise ValidationError({"page_num": "page_num must be at least 1."})
 
-        # Set default source to 'manual' if not provided
-        if "source" not in attrs or attrs.get("source") is None:
-            attrs["source"] = "manual"
+        # Only set defaults when creating new objects (not during partial updates)
+        # self.instance is None when creating, set to the object when updating
+        if self.instance is None:
+            # Set default source to 'manual' if not provided
+            if "source" not in attrs or attrs.get("source") is None:
+                attrs["source"] = "manual"
 
-        # Set default status based on source
-        if "status" not in attrs or attrs.get("status") is None:
-            if attrs.get("source") == "manual":
-                attrs["status"] = "approved"
-            else:
-                attrs["status"] = "pending"
+            # Set default status based on source
+            if "status" not in attrs or attrs.get("status") is None:
+                if attrs.get("source") == "manual":
+                    attrs["status"] = "approved"
+                else:
+                    attrs["status"] = "pending"
 
         return attrs
