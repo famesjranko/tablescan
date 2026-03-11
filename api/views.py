@@ -679,3 +679,18 @@ class TaskStatusView(View):
             response_data['error'] = str(result.result)
 
         return JsonResponse(response_data)
+
+
+class BookViewerView(LoginRequiredMixin, View):
+    """Book viewer for manual table selection and review"""
+
+    def get(self, request, pk):
+        report = get_object_or_404(Report, pk=pk)
+
+        # Verify ownership
+        if report.owner != request.user:
+            return HttpResponse('Forbidden', status=403)
+
+        return render(request, 'reports/book_viewer.html', {
+            'report': report,
+        })
