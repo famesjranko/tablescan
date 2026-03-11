@@ -29,6 +29,9 @@ staticfiles/
 *.csv
 *.pdf:Zone.Identifier
 
+# Uploaded documents and extracted tables
+documents/*/
+
 # Environment
 .env
 .env.local
