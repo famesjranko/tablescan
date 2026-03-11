@@ -43,6 +43,12 @@ export function createBookViewer(config) {
         currentX: 0,
         currentY: 0,
 
+        // Extraction state
+        extracting: false,
+        extractProgress: null,
+        extractError: null,
+        extractTaskId: null,
+
         /**
          * Initialize the viewer - load PDF and selections
          */
@@ -583,6 +589,114 @@ export function createBookViewer(config) {
          */
         isYoloPending(sel) {
             return sel.source === 'yolo' && sel.status === 'pending';
+        },
+
+        /**
+         * Trigger extraction of approved selections
+         */
+        async startExtraction() {
+            const approvedCount = this.getApprovedCount();
+            if (approvedCount === 0) return;
+
+            this.extracting = true;
+            this.extractProgress = { message: 'Starting extraction...', current: 0, total: approvedCount };
+            this.extractError = null;
+            this.extractTaskId = null;
+
+            try {
+                const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content;
+                const response = await fetch(`/api/reports/${this.reportId}/extract-selections/`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': csrfToken
+                    }
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.error || 'Failed to start extraction');
+                }
+
+                const data = await response.json();
+                this.extractTaskId = data.task_id;
+                this.extractProgress = { message: 'Extraction queued...', current: 0, total: data.approved_selections };
+
+                // Start polling for task status
+                await this.pollTaskStatus(data.task_id);
+            } catch (err) {
+                console.error('Extraction error:', err);
+                this.extractError = err.message || 'Failed to start extraction';
+                this.extracting = false;
+            }
+        },
+
+        /**
+         * Poll task status until completion
+         * @param {string} taskId - Celery task ID
+         */
+        async pollTaskStatus(taskId) {
+            const pollInterval = 1000; // 1 second
+            const maxAttempts = 300; // 5 minutes max
+            let attempts = 0;
+
+            while (attempts < maxAttempts) {
+                try {
+                    const response = await fetch(`/task-status/${taskId}/`);
+                    if (!response.ok) {
+                        throw new Error('Failed to check task status');
+                    }
+
+                    const data = await response.json();
+
+                    if (data.state === 'PROGRESS' && data.progress) {
+                        this.extractProgress = {
+                            message: data.progress.message || 'Processing...',
+                            current: data.progress.current || 0,
+                            total: data.progress.total || this.getApprovedCount()
+                        };
+                    } else if (data.state === 'SUCCESS') {
+                        this.extractProgress = { message: 'Extraction complete!', current: 100, total: 100 };
+                        // Redirect to report detail page after a brief delay
+                        setTimeout(() => {
+                            window.location.href = `/reports/${this.reportId}/`;
+                        }, 1000);
+                        return;
+                    } else if (data.state === 'FAILURE') {
+                        throw new Error(data.error || 'Extraction failed');
+                    }
+
+                    // Wait before next poll
+                    await new Promise(resolve => setTimeout(resolve, pollInterval));
+                    attempts++;
+                } catch (err) {
+                    console.error('Polling error:', err);
+                    this.extractError = err.message || 'Error checking extraction status';
+                    this.extracting = false;
+                    return;
+                }
+            }
+
+            // Timeout
+            this.extractError = 'Extraction timed out. Please check the report page.';
+            this.extracting = false;
+        },
+
+        /**
+         * Cancel/close extraction UI (on error)
+         */
+        closeExtractionError() {
+            this.extractError = null;
+            this.extracting = false;
+            this.extractProgress = null;
+        },
+
+        /**
+         * Retry extraction after error
+         */
+        retryExtraction() {
+            this.extractError = null;
+            this.startExtraction();
         }
     };
 }
