@@ -62,6 +62,45 @@
                 </template>
             </div>
 
+            <!-- Extraction Mode Selection -->
+            <div class="mt-6">
+                <label class="block text-sm font-medium text-gray-700 mb-3">Extraction Mode</label>
+                <div class="space-y-3">
+                    <!-- Automatic -->
+                    <label class="relative flex items-start p-3 border rounded-lg cursor-pointer transition-colors"
+                           :class="extractionMode === 'auto' ? 'border-primary bg-blue-50' : 'border-gray-200 hover:border-gray-300'">
+                        <input type="radio" name="extraction_mode" value="auto" x-model="extractionMode"
+                               class="mt-0.5 h-4 w-4 text-primary focus:ring-primary border-gray-300">
+                        <div class="ml-3">
+                            <span class="block text-sm font-medium text-gray-900">Automatic</span>
+                            <span class="block text-xs text-gray-500">AI detects and extracts tables automatically. Results appear immediately.</span>
+                        </div>
+                    </label>
+
+                    <!-- Auto + Review -->
+                    <label class="relative flex items-start p-3 border rounded-lg cursor-pointer transition-colors"
+                           :class="extractionMode === 'review' ? 'border-primary bg-blue-50' : 'border-gray-200 hover:border-gray-300'">
+                        <input type="radio" name="extraction_mode" value="review" x-model="extractionMode"
+                               class="mt-0.5 h-4 w-4 text-primary focus:ring-primary border-gray-300">
+                        <div class="ml-3">
+                            <span class="block text-sm font-medium text-gray-900">Auto + Review</span>
+                            <span class="block text-xs text-gray-500">AI detects tables, then you approve or adjust selections before extraction.</span>
+                        </div>
+                    </label>
+
+                    <!-- Manual Selection -->
+                    <label class="relative flex items-start p-3 border rounded-lg cursor-pointer transition-colors"
+                           :class="extractionMode === 'manual' ? 'border-primary bg-blue-50' : 'border-gray-200 hover:border-gray-300'">
+                        <input type="radio" name="extraction_mode" value="manual" x-model="extractionMode"
+                               class="mt-0.5 h-4 w-4 text-primary focus:ring-primary border-gray-300">
+                        <div class="ml-3">
+                            <span class="block text-sm font-medium text-gray-900">Manual Selection</span>
+                            <span class="block text-xs text-gray-500">Draw table regions yourself in the viewer. Best for complex layouts.</span>
+                        </div>
+                    </label>
+                </div>
+            </div>
+
             <!-- Page Range Options -->
             <div class="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
@@ -252,6 +291,7 @@ function uploadForm() {
         camelotFlavor: 'auto',
         mergeHeaders: true,
         rowTol: 2,
+        extractionMode: 'auto',
 
         handleFileSelect(event) {
             const file = event.target.files[0];
@@ -301,6 +341,7 @@ function uploadForm() {
             formData.append('camelot_flavor', this.camelotFlavor);
             formData.append('merge_headers', this.mergeHeaders ? 'on' : 'off');
             formData.append('row_tol', this.rowTol);
+            formData.append('extraction_mode', this.extractionMode);
 
             try {
                 const response = await fetch('{% url "upload_async" %}', {
@@ -314,9 +355,19 @@ function uploadForm() {
                 const data = await response.json();
 
                 if (response.ok) {
+                    // Manual mode: no task, redirect immediately
+                    if (this.extractionMode === 'manual' && data.redirect_url) {
+                        this.progress = 100;
+                        this.statusMessage = 'Redirecting to viewer...';
+                        setTimeout(() => {
+                            window.location.href = data.redirect_url;
+                        }, 500);
+                        return;
+                    }
+
                     this.taskId = data.task_id;
                     this.progress = 20;
-                    this.statusMessage = 'Processing PDF...';
+                    this.statusMessage = this.extractionMode === 'review' ? 'Detecting tables...' : 'Processing PDF...';
                     this.pollTaskStatus();
                 } else {
                     this.errorMessage = data.error || 'Upload failed';
@@ -342,9 +393,15 @@ function uploadForm() {
                 } else if (data.state === 'SUCCESS') {
                     this.progress = 100;
                     this.statusMessage = 'Complete!';
-                    // Redirect to report detail page
+                    // Redirect to appropriate page based on mode
                     setTimeout(() => {
-                        window.location.href = `/reports/${data.result.report_id}/`;
+                        if (data.result.redirect_url) {
+                            // Review mode: redirect to book viewer
+                            window.location.href = data.result.redirect_url;
+                        } else {
+                            // Auto mode: redirect to report detail
+                            window.location.href = `/reports/${data.result.report_id}/`;
+                        }
                     }, 500);
                 } else if (data.state === 'FAILURE') {
                     this.errorMessage = data.error || 'Extraction failed';

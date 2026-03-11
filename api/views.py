@@ -562,7 +562,7 @@ class UploadAsyncView(LoginRequiredMixin, View):
     """Async upload endpoint that queues extraction via Celery"""
 
     def post(self, request):
-        from api.tasks import extract_tables_task
+        from api.tasks import extract_tables_task, detect_tables_for_review
 
         # Apply rate limiting
         upload_throttle = UploadRateThrottle()
@@ -606,6 +606,7 @@ class UploadAsyncView(LoginRequiredMixin, View):
         row_tol = int(request.POST.get('row_tol', 2))
         strip_text = request.POST.get('strip_text', '\n')
         merge_headers = request.POST.get('merge_headers', 'on') == 'on'
+        extraction_mode = request.POST.get('extraction_mode', 'auto')
 
         # Create report using serializer
         report_serializer = ReportSerializer(
@@ -629,9 +630,10 @@ class UploadAsyncView(LoginRequiredMixin, View):
         file_name = full_path.name
         file_path = str(PurePath(settings.MEDIA_ROOT, base_dir, file_name))
 
-        # Update report with name and type
+        # Update report with name, type, and extraction mode
         report.name = base_dir
         report.f_type = file_name.split('.')[1]
+        report.extraction_mode = extraction_mode
         report.save()
 
         # Clean empty directories
@@ -641,23 +643,43 @@ class UploadAsyncView(LoginRequiredMixin, View):
             if len(os.listdir(path)) == 0:
                 Path.rmdir(Path(path))
 
-        # Queue extraction task with options
-        task = extract_tables_task.delay(
-            report.id,
-            file_path,
-            start_page,
-            end_page,
-            flavor=flavor,
-            row_tol=row_tol,
-            strip_text=strip_text,
-            merge_headers=merge_headers
-        )
+        # Handle different extraction modes
+        if extraction_mode == 'manual':
+            # Manual mode: set status and redirect immediately to viewer
+            report.extraction_status = 'pending_review'
+            report.save(update_fields=['extraction_status'])
+            return JsonResponse({
+                'report_id': report.id,
+                'status': 'ready',
+                'redirect_url': f'/book-viewer/{report.id}/'
+            })
 
-        return JsonResponse({
-            'task_id': task.id,
-            'report_id': report.id,
-            'status': 'queued'
-        })
+        elif extraction_mode == 'review':
+            # Review mode: run detection task, then redirect to viewer
+            task = detect_tables_for_review.delay(report.id)
+            return JsonResponse({
+                'task_id': task.id,
+                'report_id': report.id,
+                'status': 'queued'
+            })
+
+        else:
+            # Auto mode (default): full extraction
+            task = extract_tables_task.delay(
+                report.id,
+                file_path,
+                start_page,
+                end_page,
+                flavor=flavor,
+                row_tol=row_tol,
+                strip_text=strip_text,
+                merge_headers=merge_headers
+            )
+            return JsonResponse({
+                'task_id': task.id,
+                'report_id': report.id,
+                'status': 'queued'
+            })
 
 
 class TaskStatusView(View):
