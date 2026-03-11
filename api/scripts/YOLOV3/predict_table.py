@@ -359,10 +359,11 @@ def detect_tables(file_path, page_number, output_type, report_db, extract_dir,
         table = strip_empty_rows_and_cols(table)
 
         # Process headers if enabled
+        header_spans = []
         if merge_headers:
-            table = process_table_headers(table, merge_headers=True)
+            table, header_spans = process_table_headers(table, merge_headers=True)
 
-        processed_tables.append(table)
+        processed_tables.append((table, header_spans))
 
     output_camelot = processed_tables
 
@@ -388,7 +389,7 @@ def detect_tables(file_path, page_number, output_type, report_db, extract_dir,
                 'y1': float(coords[3])
             })
 
-    for i, db in enumerate(output_camelot):
+    for i, (db, header_spans) in enumerate(output_camelot):
         # log.output('SUCCESS', f'found table: page {pg}, table {i}')
 
         # Get bounding box for this table (if available)
@@ -396,6 +397,10 @@ def detect_tables(file_path, page_number, output_type, report_db, extract_dir,
 
         # Build structure_json from DataFrame
         structure = build_structure_json(db)
+
+        # Add header spans for hierarchical header rendering
+        if header_spans:
+            structure['header_spans'] = header_spans
 
         # Get confidence from parsing report (if available)
         confidence = None
@@ -414,7 +419,7 @@ def detect_tables(file_path, page_number, output_type, report_db, extract_dir,
                 db.to_json(str(e_path), orient="columns")
             elif key == "xlsx":
                 # Export to XLSX with cell spans and header formatting (US-018)
-                export_to_xlsx(db, str(e_path), structure_json=structure, header_rows=1)
+                export_to_xlsx(db, str(e_path), structure_json=structure, header_rows=len(header_spans) + 1 if header_spans else 1)
 
             # build cleaned path for database
             db_path = PurePath(PurePath(e_path).parts[-3], key, PurePath(e_path).name)
@@ -512,8 +517,9 @@ def extract_tables_direct_readonly(file_path: str, page_number: int,
         table = table.fillna("")
         table = strip_empty_rows_and_cols(table)
 
+        header_spans = []
         if merge_headers:
-            table = process_table_headers(table, merge_headers=True)
+            table, header_spans = process_table_headers(table, merge_headers=True)
 
         # Validate table
         if not tableValidate(table):
@@ -527,9 +533,14 @@ def extract_tables_direct_readonly(file_path: str, page_number: int,
         # Build structure_json from processed DataFrame
         structure = build_structure_json(table, result.metadata if result.metadata else None)
 
+        # Add header spans for hierarchical header rendering
+        if header_spans:
+            structure['header_spans'] = header_spans
+
         # Create new ExtractionResult with processed data and enriched metadata
         enriched_metadata = dict(result.metadata) if result.metadata else {}
         enriched_metadata['structure_json'] = structure
+        enriched_metadata['header_spans'] = header_spans
         enriched_metadata['parsing_report'] = {
             'accuracy': result.confidence * 100,
             'whitespace': result.metadata.get('parsing_report', {}).get('whitespace', 0) if result.metadata else 0,
@@ -617,8 +628,9 @@ def extract_tables_vision_readonly(file_path: str, page_number: int,
         table = table.fillna("")
         table = strip_empty_rows_and_cols(table)
 
+        header_spans = []
         if merge_headers:
-            table = process_table_headers(table, merge_headers=True)
+            table, header_spans = process_table_headers(table, merge_headers=True)
 
         # Validate table
         if not tableValidate(table):
@@ -632,9 +644,14 @@ def extract_tables_vision_readonly(file_path: str, page_number: int,
         # Build structure_json from processed DataFrame
         structure = build_structure_json(table, result.metadata if result.metadata else None)
 
+        # Add header spans for hierarchical header rendering
+        if header_spans:
+            structure['header_spans'] = header_spans
+
         # Create new ExtractionResult with processed data and enriched metadata
         enriched_metadata = dict(result.metadata) if result.metadata else {}
         enriched_metadata['structure_json'] = structure
+        enriched_metadata['header_spans'] = header_spans
         enriched_metadata['computed_score'] = score
         enriched_metadata['parsing_report'] = {
             'accuracy': result.confidence * 100,
@@ -882,6 +899,132 @@ def detect_table_regions(file_path: str, page_number: int) -> List[dict]:
         })
 
     return regions
+
+
+def extract_from_manual_areas(
+    pdf_path: str,
+    page_num: int,
+    table_areas: List[tuple],
+    flavor: str = 'auto',
+    row_tol: int = 2,
+    strip_text: str = '\n',
+    merge_headers: bool = True
+) -> List[ExtractionResult]:
+    """
+    Extract tables from manually specified areas using the same logic as detect_tables.
+
+    This uses Camelot with auto-flavor detection and accuracy comparison,
+    matching the quality of automatic extraction.
+
+    Args:
+        pdf_path: Path to PDF file
+        page_num: Page number (1-indexed)
+        table_areas: List of (x1, y1, x2, y2) tuples in PDF coordinates
+        flavor: 'auto', 'lattice', or 'stream'
+        row_tol: Row tolerance for stream flavor
+        strip_text: Characters to strip from cells
+        merge_headers: Whether to merge fragmented headers
+
+    Returns:
+        List of ExtractionResult objects
+    """
+    log = Logging()
+
+    # Convert table_areas tuples to Camelot string format
+    camelot_areas = [f"{x1},{y1},{x2},{y2}" for (x1, y1, x2, y2) in table_areas]
+
+    def run_camelot(use_flavor, areas):
+        """Run Camelot extraction and return results with accuracy."""
+        kwargs = {
+            'filepath': pdf_path,
+            'pages': str(page_num),
+            'flavor': use_flavor,
+            'table_areas': areas,
+            'backend': 'poppler',
+        }
+        if use_flavor == 'stream':
+            kwargs['row_tol'] = row_tol
+        if strip_text:
+            kwargs['strip_text'] = strip_text
+
+        try:
+            result = camelot.read_pdf(**kwargs)
+            total_acc = sum(
+                t.parsing_report.get('accuracy', 0)
+                for t in result if hasattr(t, 'parsing_report')
+            )
+            count = len([t for t in result if hasattr(t, 'parsing_report')])
+            avg_acc = total_acc / count if count > 0 else 0
+            return result, avg_acc
+        except Exception as e:
+            log.output('WARNING', f'Camelot {use_flavor} failed: {e}')
+            return None, 0
+
+    # Auto-detect or use specified flavor
+    if flavor == 'auto':
+        # Try both flavors and pick best
+        result_lattice, acc_lattice = run_camelot('lattice', camelot_areas)
+        result_stream, acc_stream = run_camelot('stream', camelot_areas)
+
+        log.output('INFO', f'Manual extraction - lattice: {acc_lattice:.1f}%, stream: {acc_stream:.1f}%')
+
+        # Pick better result (prefer lattice if close)
+        if result_stream is not None and acc_stream > acc_lattice + 5:
+            output_camelot = result_stream
+            actual_flavor = 'stream'
+        elif result_lattice is not None:
+            output_camelot = result_lattice
+            actual_flavor = 'lattice'
+        elif result_stream is not None:
+            output_camelot = result_stream
+            actual_flavor = 'stream'
+        else:
+            output_camelot = []
+            actual_flavor = 'none'
+    else:
+        output_camelot, _ = run_camelot(flavor, camelot_areas)
+        actual_flavor = flavor
+        if output_camelot is None:
+            output_camelot = []
+
+    # Process results
+    results = []
+    for i, table in enumerate(output_camelot):
+        if not tableValidate(table.df):
+            continue
+
+        df = table.df.fillna("")
+        df = strip_empty_rows_and_cols(df)
+
+        header_spans = []
+        if merge_headers:
+            df, header_spans = process_table_headers(df, merge_headers=True)
+
+        # Get confidence from parsing report
+        confidence = 0.0
+        if hasattr(table, 'parsing_report'):
+            confidence = table.parsing_report.get('accuracy', 0) / 100.0
+
+        # Build metadata
+        metadata = {
+            'table_index': i,
+            'page_num': page_num,
+            'flavor': actual_flavor,
+            'source': 'manual_selection',
+            'header_spans': header_spans,
+        }
+        if hasattr(table, 'parsing_report'):
+            metadata['parsing_report'] = table.parsing_report
+
+        results.append(ExtractionResult(
+            dataframe=df,
+            confidence=confidence,
+            method=f'camelot_{actual_flavor}',
+            metadata=metadata
+        ))
+
+    log.output('INFO', f'Manual extraction: {len(results)} table(s) using {actual_flavor}')
+    return results
 
 
 def extract_tables_vision(file_path: str, page_number: int, output_type: str,

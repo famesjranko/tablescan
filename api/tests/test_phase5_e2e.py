@@ -224,7 +224,7 @@ class TestManualSelectionCodeStructure:
 
     def test_upload_view_redirects_to_viewer_for_manual(self, views_source):
         """Manual mode should redirect to book viewer."""
-        assert "/book-viewer/" in views_source
+        assert "/viewer/" in views_source
 
     def test_extract_from_selections_task_exists(self, tasks_source):
         """extract_from_selections task should exist."""
@@ -310,9 +310,9 @@ class TestExtractionFromSelections:
         path = Path(__file__).parent.parent / "tasks.py"
         return path.read_text()
 
-    def test_task_uses_multi_extractor(self, tasks_source):
-        """extract_from_selections should use MultiExtractor."""
-        assert "MultiExtractor" in tasks_source
+    def test_task_uses_extract_from_manual_areas(self, tasks_source):
+        """extract_from_selections should use extract_from_manual_areas for user-specified regions."""
+        assert "extract_from_manual_areas" in tasks_source
 
     def test_task_groups_by_page(self, tasks_source):
         """Task should group selections by page_num."""
@@ -846,7 +846,7 @@ class TestAutoReviewDetectionFlow:
     def test_task_returns_redirect_url(self, tasks_source):
         """Task should return redirect URL to viewer."""
         assert "'redirect_url'" in tasks_source
-        assert "/book-viewer/" in tasks_source
+        assert "/viewer/" in tasks_source
 
     def test_task_returns_selections_count(self, tasks_source):
         """Task should return count of created selections."""

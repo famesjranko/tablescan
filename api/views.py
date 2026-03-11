@@ -517,11 +517,17 @@ class TablePreviewView(View):
             headers = rows[0] if rows else []
             data_rows = rows[1:max_rows + 1] if len(rows) > 1 else []
 
+            # Get header spans from structure_json if available
+            header_spans = None
+            if extracted.structure_json and 'header_spans' in extracted.structure_json:
+                header_spans = extracted.structure_json['header_spans']
+
             return JsonResponse({
                 'headers': headers,
                 'rows': data_rows,
                 'truncated': truncated,
-                'total_rows': len(rows) - 1
+                'total_rows': len(rows) - 1,
+                'header_spans': header_spans
             })
         except Exception as e:
             return JsonResponse({'error': str(e)}, status=500)
@@ -651,7 +657,7 @@ class UploadAsyncView(LoginRequiredMixin, View):
             return JsonResponse({
                 'report_id': report.id,
                 'status': 'ready',
-                'redirect_url': f'/book-viewer/{report.id}/'
+                'redirect_url': f'/reports/{report.id}/viewer/'
             })
 
         elif extraction_mode == 'review':
