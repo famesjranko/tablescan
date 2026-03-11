@@ -9,7 +9,8 @@ from pathlib import Path, PurePath
 
 from api.scripts import table_extract
 from api.scripts.logging import Logging
-from api.models import Report
+from api.scripts.YOLOV3.predict_table import detect_table_regions
+from api.models import Report, TableSelection
 
 from timeit import default_timer as timer
 from humanfriendly import format_timespan
@@ -101,6 +102,131 @@ def extract_tables_task(self, report_id, file_path, start_page, end_page,
 
     except Exception as e:
         log.output("ERROR", f"[Task {self.request.id}] Extraction failed: {str(e)}")
+        self.update_state(state='FAILURE', meta={
+            'status': f'Error: {str(e)}'
+        })
+        raise
+
+
+@shared_task(bind=True)
+def detect_tables_for_review(self, report_id):
+    """
+    Async task to run YOLO detection and save boxes as TableSelection records.
+    Used for the review workflow where users approve/reject detected tables.
+
+    Args:
+        report_id: Database ID of the Report
+
+    Returns:
+        dict with status, report_id, selections_count, redirect_url
+    """
+    log = Logging()
+
+    self.update_state(state='PROGRESS', meta={
+        'current': 0,
+        'total': 100,
+        'status': 'Starting detection...'
+    })
+
+    start = timer()
+
+    try:
+        # Validate report exists
+        try:
+            report = Report.objects.get(id=report_id)
+        except Report.DoesNotExist:
+            log.output("WARNING", f"[Task {self.request.id}] Report {report_id} not found - stale task, skipping")
+            return {
+                'status': 'skipped',
+                'report_id': report_id,
+                'reason': 'Report no longer exists (stale task)'
+            }
+
+        # Update status to detecting
+        report.extraction_status = 'detecting'
+        report.save(update_fields=['extraction_status'])
+
+        log.output("INFO", f"[Task {self.request.id}] Starting YOLO detection for report {report_id}")
+
+        self.update_state(state='PROGRESS', meta={
+            'current': 10,
+            'total': 100,
+            'status': 'Running table detection...'
+        })
+
+        # Get page range
+        start_page = report.start_page or 1
+        end_page = report.end_page if report.end_page and report.end_page > 0 else report.total_pages or 1
+
+        file_path = report.document.path
+        total_pages = end_page - start_page + 1
+        selections_created = 0
+
+        # Process each page
+        for i, page_num in enumerate(range(start_page, end_page + 1)):
+            progress = 10 + int(80 * (i / total_pages))
+            self.update_state(state='PROGRESS', meta={
+                'current': progress,
+                'total': 100,
+                'status': f'Detecting tables on page {page_num}...'
+            })
+
+            try:
+                regions = detect_table_regions(file_path, page_num)
+
+                # Save each detected region as a TableSelection
+                for region in regions:
+                    TableSelection.objects.create(
+                        report=report,
+                        page_num=page_num,
+                        x1=region['x1'],
+                        y1=region['y1'],
+                        x2=region['x2'],
+                        y2=region['y2'],
+                        confidence=region.get('confidence'),
+                        source='yolo',
+                        status='pending'
+                    )
+                    selections_created += 1
+
+                log.output("INFO", f"[Task {self.request.id}] Page {page_num}: detected {len(regions)} table(s)")
+
+            except Exception as page_error:
+                log.output("WARNING", f"[Task {self.request.id}] Page {page_num} detection failed: {str(page_error)}")
+                # Continue with other pages
+
+        # Update status to pending_review
+        report.extraction_status = 'pending_review'
+        report.save(update_fields=['extraction_status'])
+
+        self.update_state(state='PROGRESS', meta={
+            'current': 100,
+            'total': 100,
+            'status': 'Detection complete'
+        })
+
+        end = timer()
+        duration = format_timespan(end - start)
+        log.output("INFO", f"[Task {self.request.id}] Detection completed in {duration}, {selections_created} selections created")
+
+        return {
+            'status': 'completed',
+            'report_id': report_id,
+            'selections_count': selections_created,
+            'redirect_url': f'/book-viewer/{report_id}/'
+        }
+
+    except Exception as e:
+        log.output("ERROR", f"[Task {self.request.id}] Detection failed: {str(e)}")
+
+        # Update report status to failed
+        try:
+            report = Report.objects.get(id=report_id)
+            report.extraction_status = 'failed'
+            report.save(update_fields=['extraction_status'])
+        except Report.DoesNotExist:
+            pass
+
         self.update_state(state='FAILURE', meta={
             'status': f'Error: {str(e)}'
         })
