@@ -824,6 +824,66 @@ def extract_tables_direct(file_path: str, page_number: int, output_type: str,
 # %%
 
 
+def detect_table_regions(file_path: str, page_number: int) -> List[dict]:
+    """
+    Detect table regions in a PDF page using YOLO without extracting tables.
+
+    This function performs YOLO inference to detect table bounding boxes but does NOT:
+    - Call Camelot to extract table content
+    - Save anything to the database
+    - Create CSV/JSON/XLSX files
+
+    Used by the book viewer to get initial table detections for user review.
+
+    Args:
+        file_path: Path to PDF file
+        page_number: Page number to process (1-indexed)
+
+    Returns:
+        List of dicts with keys: x1, y1, x2, y2, confidence
+        Coordinates are in PDF space (bottom-left origin)
+        Y-flip applied: pdf_y = (1 - y_norm) * H_pdf (see bboxes_pdf)
+    """
+    pdf_file = file_path
+    pg = page_number
+
+    # Image conversion
+    img_path = pdf_file[:-4] + "-" + str(pg) + ".jpg"
+    pdf_page = norm_pdf_page(pdf_file, pg)
+    img = pdf_page2img(pdf_file, pg, save_image=True)
+
+    # YOLO inference
+    opt = parameters(img_path)
+    output_detect = detectTable(opt)
+    output = outpout_yolo(output_detect)
+
+    # Cleanup temp image file
+    try:
+        Path.unlink(Path(img_path))
+    except FileNotFoundError:
+        pass  # Already cleaned up
+
+    # Convert bboxes to PDF coordinates
+    regions = []
+    for bbox in output:
+        # bbox format: [x1, y1, x2, y2, class, confidence]
+        # confidence is at index 5
+        confidence = bbox[5] if len(bbox) > 5 else None
+
+        # Get PDF coordinates using existing function (applies Y-flip)
+        [x1, y1, x2, y2] = bboxes_pdf(img, pdf_page, bbox)
+
+        regions.append({
+            'x1': x1,
+            'y1': y1,
+            'x2': x2,
+            'y2': y2,
+            'confidence': confidence
+        })
+
+    return regions
+
+
 def extract_tables_vision(file_path: str, page_number: int, output_type: str,
                           report_db, extract_dir: dict, strip_text: str = '\n',
                           merge_headers: bool = True,
