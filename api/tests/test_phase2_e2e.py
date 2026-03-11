@@ -188,6 +188,87 @@ def complex_multi_table_pdf():
         os.unlink(pdf_path)
 
 
+@pytest.fixture
+def multipage_mixed_pdf():
+    """
+    Create a multi-page PDF with tables on some pages and not others.
+
+    Page 1: Bordered table (should extract)
+    Page 2: Text only (no tables)
+    Page 3: Another bordered table (should extract)
+    """
+    with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as f:
+        pdf_path = f.name
+
+    doc = fitz.open()
+
+    # Page 1: Table with financial data
+    page1 = doc.new_page(width=612, height=792)
+    shape1 = page1.new_shape()
+    x1, y1 = 80, 100
+    cw1, rh1 = 100, 25
+    rows1, cols1 = 4, 3
+
+    for i in range(rows1 + 1):
+        y = y1 + i * rh1
+        shape1.draw_line(fitz.Point(x1, y), fitz.Point(x1 + cols1 * cw1, y))
+    for j in range(cols1 + 1):
+        x = x1 + j * cw1
+        shape1.draw_line(fitz.Point(x, y1), fitz.Point(x, y1 + rows1 * rh1))
+    shape1.finish(color=(0, 0, 0), width=0.5)
+    shape1.commit()
+
+    data1 = [
+        ["Quarter", "Sales", "Growth"],
+        ["Q1 2025", "$100K", "10%"],
+        ["Q2 2025", "$120K", "20%"],
+        ["Q3 2025", "$150K", "25%"],
+    ]
+    for i, row in enumerate(data1):
+        for j, cell in enumerate(row):
+            page1.insert_text(fitz.Point(x1 + j * cw1 + 5, y1 + i * rh1 + 18), cell, fontsize=9)
+
+    # Page 2: Text only - no tables
+    page2 = doc.new_page(width=612, height=792)
+    page2.insert_text(fitz.Point(50, 100), "Executive Summary", fontsize=14)
+    page2.insert_text(fitz.Point(50, 130), "This page contains only text, no tables.", fontsize=10)
+    for y in range(160, 400, 20):
+        page2.insert_text(fitz.Point(50, y), "Lorem ipsum dolor sit amet, consectetur adipiscing elit.", fontsize=10)
+
+    # Page 3: Another table
+    page3 = doc.new_page(width=612, height=792)
+    shape3 = page3.new_shape()
+    x3, y3 = 80, 100
+    cw3, rh3 = 120, 25
+    rows3, cols3 = 3, 2
+
+    for i in range(rows3 + 1):
+        y = y3 + i * rh3
+        shape3.draw_line(fitz.Point(x3, y), fitz.Point(x3 + cols3 * cw3, y))
+    for j in range(cols3 + 1):
+        x = x3 + j * cw3
+        shape3.draw_line(fitz.Point(x, y3), fitz.Point(x, y3 + rows3 * rh3))
+    shape3.finish(color=(0, 0, 0), width=0.5)
+    shape3.commit()
+
+    data3 = [
+        ["Region", "Revenue"],
+        ["North", "$500K"],
+        ["South", "$300K"],
+    ]
+    for i, row in enumerate(data3):
+        for j, cell in enumerate(row):
+            page3.insert_text(fitz.Point(x3 + j * cw3 + 5, y3 + i * rh3 + 18), cell, fontsize=9)
+
+    doc.save(pdf_path)
+    doc.close()
+
+    yield pdf_path
+
+    if os.path.exists(pdf_path):
+        os.unlink(pdf_path)
+
+
 # =============================================================================
 # Test: Multiple Extractors Run
 # =============================================================================
@@ -232,6 +313,79 @@ class TestMultiExtractorPipelineRuns:
         log_text = caplog.text.lower()
         # At least one extractor should have logged
         assert 'multiextractor' in log_text or len(caplog.records) >= 0
+
+
+# =============================================================================
+# Test: Multi-Page PDF Extraction
+# =============================================================================
+
+class TestMultiExtractorMultiPage:
+    """Verify MultiExtractor handles multi-page PDFs correctly."""
+
+    def test_multi_extractor_extracts_from_page_with_table(self, multipage_mixed_pdf):
+        """MultiExtractor should extract tables from pages that have them."""
+        extractor = MultiExtractor()
+
+        # Page 1 has a table
+        results = extractor.extract_best(multipage_mixed_pdf, 1)
+
+        assert len(results) >= 1, "Should find at least one table on page 1"
+        for result in results:
+            assert isinstance(result, ExtractionResult)
+
+    def test_multi_extractor_returns_empty_for_page_without_table(self, multipage_mixed_pdf):
+        """MultiExtractor should return empty list for pages without tables."""
+        extractor = MultiExtractor()
+
+        # Page 2 has only text, no tables
+        results = extractor.extract_best(multipage_mixed_pdf, 2)
+
+        assert results == [], "Should return empty list for page 2 (no tables)"
+
+    def test_multi_extractor_extracts_from_multiple_pages(self, multipage_mixed_pdf):
+        """MultiExtractor should extract tables from different pages correctly."""
+        extractor = MultiExtractor()
+
+        page1_results = extractor.extract_best(multipage_mixed_pdf, 1)
+        page2_results = extractor.extract_best(multipage_mixed_pdf, 2)
+        page3_results = extractor.extract_best(multipage_mixed_pdf, 3)
+
+        # Page 1: has table
+        assert len(page1_results) >= 1, "Page 1 should have tables"
+        # Page 2: text only
+        assert len(page2_results) == 0, "Page 2 should have no tables"
+        # Page 3: has table
+        assert len(page3_results) >= 1, "Page 3 should have tables"
+
+    def test_multi_extractor_page_num_metadata_correct(self, multipage_mixed_pdf):
+        """MultiExtractor results should have correct page_num in metadata."""
+        extractor = MultiExtractor()
+
+        page1_results = extractor.extract_best(multipage_mixed_pdf, 1)
+        page3_results = extractor.extract_best(multipage_mixed_pdf, 3)
+
+        for result in page1_results:
+            assert 'page_num' in result.metadata
+            assert result.metadata['page_num'] == 1, "Page 1 results should have page_num=1"
+
+        for result in page3_results:
+            assert 'page_num' in result.metadata
+            assert result.metadata['page_num'] == 3, "Page 3 results should have page_num=3"
+
+    def test_multi_extractor_comparison_works_across_pages(self, multipage_mixed_pdf):
+        """extract_with_comparison should work correctly across different pages."""
+        extractor = MultiExtractor()
+
+        # Test page 1 (has table)
+        results1, comparison1 = extractor.extract_with_comparison(multipage_mixed_pdf, 1)
+        # extractors_run is a list of extractor details
+        assert len(comparison1['extractors_run']) == 3
+        assert len(results1) >= 1
+
+        # Test page 2 (no table)
+        results2, comparison2 = extractor.extract_with_comparison(multipage_mixed_pdf, 2)
+        assert len(comparison2['extractors_run']) == 3
+        assert comparison2['total_candidates'] == 0  # No tables found
 
 
 class TestMultiExtractorSourceVerification:

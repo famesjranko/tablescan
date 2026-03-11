@@ -6,12 +6,15 @@ vision_extractor.py
     from image-based (scanned) PDF pages. Works on CPU without GPU.
 """
 
+import logging
 import os
 from typing import List, Optional
 
 import pandas as pd
 
 from .base import BaseExtractor, ExtractionResult
+
+logger = logging.getLogger(__name__)
 
 
 class VisionExtractor(BaseExtractor):
@@ -129,8 +132,10 @@ class VisionExtractor(BaseExtractor):
         except ValueError:
             # Re-raise ValueError for page out of range
             raise
-        except Exception:
+        except Exception as e:
             # Return empty list for other extraction failures
+            # Log at DEBUG level for troubleshooting (MultiExtractor logs at INFO/WARNING)
+            logger.debug(f"[VisionExtractor] Extraction failed for {pdf_path} page {page_num}: {e}")
             return []
 
         return results

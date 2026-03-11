@@ -6,6 +6,7 @@ pdfplumber_extractor.py
     optimized for born-digital PDFs with text-based table structures.
 """
 
+import logging
 import os
 from typing import List, Optional
 
@@ -13,6 +14,8 @@ import pandas as pd
 import pdfplumber
 
 from .base import BaseExtractor, ExtractionResult
+
+logger = logging.getLogger(__name__)
 
 
 class PdfplumberExtractor(BaseExtractor):
@@ -144,8 +147,10 @@ class PdfplumberExtractor(BaseExtractor):
         except ValueError:
             # Re-raise ValueError for page out of range
             raise
-        except Exception:
+        except Exception as e:
             # Return empty list for other extraction failures
+            # Log at DEBUG level for troubleshooting (MultiExtractor logs at INFO/WARNING)
+            logger.debug(f"[PdfplumberExtractor] Extraction failed for {pdf_path} page {page_num}: {e}")
             return []
 
         return results

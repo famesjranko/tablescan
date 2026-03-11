@@ -896,3 +896,62 @@ class TestMultipageExtraction:
 
         assert isinstance(page1_results, list)
         assert isinstance(page2_results, list)
+
+    def test_camelot_extracts_tables_from_correct_pages(self, multipage_table_pdf):
+        """Camelot should detect page differences correctly."""
+        extractor = CamelotExtractor()
+
+        page1_results = extractor.extract(multipage_table_pdf, 1)
+        page2_results = extractor.extract(multipage_table_pdf, 2)
+
+        # Page 1 has a small bordered table - Camelot may or may not detect it
+        # The important thing is page 2 (no tables) should return empty
+        assert isinstance(page1_results, list)
+
+        # Page 2 has only text - should find no tables
+        assert len(page2_results) == 0, "Should find no tables on page 2"
+
+    def test_pdfplumber_extracts_tables_from_correct_pages(self, multipage_table_pdf):
+        """Pdfplumber should find tables on page 1 and no tables on page 2."""
+        extractor = PdfplumberExtractor()
+
+        page1_results = extractor.extract(multipage_table_pdf, 1)
+        page2_results = extractor.extract(multipage_table_pdf, 2)
+
+        # Page 1 has a bordered table - should find it
+        assert len(page1_results) >= 1, "Should find at least one table on page 1"
+
+        # Page 2 has only text - should find no tables
+        assert len(page2_results) == 0, "Should find no tables on page 2"
+
+    def test_camelot_page_num_metadata_correct(self, multipage_table_pdf):
+        """Camelot extraction results should have correct page_num in metadata."""
+        extractor = CamelotExtractor()
+
+        page1_results = extractor.extract(multipage_table_pdf, 1)
+
+        for result in page1_results:
+            assert 'page_num' in result.metadata, "Metadata should contain page_num"
+            assert result.metadata['page_num'] == 1, "page_num should be 1 for page 1"
+
+    def test_pdfplumber_page_num_metadata_correct(self, multipage_table_pdf):
+        """Pdfplumber extraction results should have correct page_num in metadata."""
+        extractor = PdfplumberExtractor()
+
+        page1_results = extractor.extract(multipage_table_pdf, 1)
+
+        for result in page1_results:
+            assert 'page_num' in result.metadata, "Metadata should contain page_num"
+            assert result.metadata['page_num'] == 1, "page_num should be 1 for page 1"
+
+    def test_extractors_handle_page_without_tables_gracefully(self, multipage_table_pdf):
+        """Both extractors should return empty list for pages without tables."""
+        camelot = CamelotExtractor()
+        pdfplumber = PdfplumberExtractor()
+
+        # Page 2 has no tables
+        camelot_results = camelot.extract(multipage_table_pdf, 2)
+        pdfplumber_results = pdfplumber.extract(multipage_table_pdf, 2)
+
+        assert camelot_results == [], "Camelot should return empty list for page without tables"
+        assert pdfplumber_results == [], "Pdfplumber should return empty list for page without tables"

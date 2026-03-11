@@ -6,6 +6,7 @@ camelot_extractor.py
     supporting both 'lattice' (bordered tables) and 'stream' (borderless tables) modes.
 """
 
+import logging
 import os
 from pathlib import Path
 from typing import List, Optional
@@ -14,6 +15,8 @@ import pandas as pd
 from camelot import io as camelot
 
 from .base import BaseExtractor, ExtractionResult
+
+logger = logging.getLogger(__name__)
 
 
 class CamelotExtractor(BaseExtractor):
@@ -127,6 +130,8 @@ class CamelotExtractor(BaseExtractor):
             if "page" in str(e).lower() and "out" in str(e).lower():
                 raise ValueError(f"Page {page_num} is out of range for {pdf_path}")
             # Return empty list for extraction failures (no tables found is not an error)
+            # Log at DEBUG level for troubleshooting (MultiExtractor logs at INFO/WARNING)
+            logger.debug(f"[CamelotExtractor] Extraction failed for {pdf_path} page {page_num}: {e}")
             return []
 
         # Convert Camelot tables to ExtractionResult

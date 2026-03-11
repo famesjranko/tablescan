@@ -604,15 +604,17 @@ class TestBuildStructureJson:
         """build_structure_json function should exist."""
         assert "def build_structure_json(" in predict_table_source
 
-    def test_build_structure_json_creates_cells_array(self, predict_table_source):
+    def test_build_structure_json_creates_cells_array(self, sample_dataframe):
         """build_structure_json should create cells array."""
-        assert "'cells'" in predict_table_source or '"cells"' in predict_table_source
+        structure = build_xlsx_structure_from_extraction(sample_dataframe)
+        assert 'cells' in structure
+        assert isinstance(structure['cells'], list)
 
-    def test_structure_json_includes_dimensions(self, predict_table_source):
+    def test_structure_json_includes_dimensions(self, sample_dataframe):
         """structure_json should include row and column counts."""
-        # Check for rows and cols in structure
-        assert "'rows'" in predict_table_source or '"rows"' in predict_table_source
-        assert "'cols'" in predict_table_source or '"cols"' in predict_table_source
+        structure = build_xlsx_structure_from_extraction(sample_dataframe)
+        assert 'rows' in structure
+        assert 'cols' in structure
 
     def test_build_xlsx_structure_from_extraction_exists(self):
         """build_xlsx_structure_from_extraction should be available."""
