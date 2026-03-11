@@ -196,3 +196,55 @@ class Extracted(models.Model):
 
     class Meta:
         ordering = ["page_num", "table_num", "f_type"]
+
+
+class TableSelection(models.Model):
+    """
+    Stores table region selections (auto-detected or manual) with approval status.
+    Coordinates are in PDF space (bottom-left origin).
+    """
+
+    SOURCE_CHOICES = (
+        ("yolo", "YOLO Detection"),
+        ("manual", "Manual Selection"),
+    )
+
+    STATUS_CHOICES = (
+        ("pending", "Pending Review"),
+        ("approved", "Approved"),
+        ("rejected", "Rejected"),
+        ("failed", "Failed"),
+    )
+
+    report = models.ForeignKey(
+        Report,
+        related_name="selections",
+        on_delete=models.CASCADE,
+    )
+    page_num = models.PositiveIntegerField()
+    x1 = models.FloatField(help_text="Left edge X coordinate (PDF space)")
+    y1 = models.FloatField(help_text="Bottom edge Y coordinate (PDF space)")
+    x2 = models.FloatField(help_text="Right edge X coordinate (PDF space)")
+    y2 = models.FloatField(help_text="Top edge Y coordinate (PDF space)")
+    confidence = models.FloatField(
+        null=True,
+        blank=True,
+        help_text="YOLO detection confidence (0.0 to 1.0)",
+    )
+    source = models.CharField(
+        max_length=10,
+        choices=SOURCE_CHOICES,
+        default="manual",
+    )
+    status = models.CharField(
+        max_length=10,
+        choices=STATUS_CHOICES,
+        default="pending",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"TableSelection {self.id}: page {self.page_num} ({self.source}, {self.status})"
+
+    class Meta:
+        ordering = ["page_num", "created_at"]
