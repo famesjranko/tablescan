@@ -199,10 +199,16 @@ class TestMetadataFieldsPopulated:
         assert "bounding_box=" in predict_table_source
 
     def test_extract_tables_direct_populates_all_fields(self, predict_table_source):
-        """extract_tables_direct should populate all rich fields."""
-        # Find the function and verify it populates fields
+        """extract_tables_direct should populate all rich fields.
+
+        Note: After decoupling extraction from saving (Phase 1 architecture refactor),
+        the field population is in save_extraction_results(), which is called by
+        extract_tables_direct().
+        """
         lines = predict_table_source.split('\n')
-        in_function = False
+        in_direct_function = False
+        calls_save_results = False
+        in_save_function = False
         field_checks = {
             'page_type': False,
             'extraction_method': False,
@@ -211,23 +217,41 @@ class TestMetadataFieldsPopulated:
             'bounding_box': False,
         }
 
+        # Check that extract_tables_direct calls save_extraction_results
         for line in lines:
             if 'def extract_tables_direct(' in line:
-                in_function = True
-            elif in_function and line.startswith('def ') and 'extract_tables_direct' not in line:
+                in_direct_function = True
+            elif in_direct_function and line.startswith('def ') and 'extract_tables_direct' not in line:
+                in_direct_function = False
+            elif in_direct_function and 'save_extraction_results' in line:
+                calls_save_results = True
+
+        # Check that save_extraction_results populates all fields
+        for line in lines:
+            if 'def save_extraction_results(' in line:
+                in_save_function = True
+            elif in_save_function and line.startswith('def ') and 'save_extraction_results' not in line:
                 break
-            elif in_function:
+            elif in_save_function:
                 for field in field_checks:
                     if f'{field}=' in line:
                         field_checks[field] = True
 
+        assert calls_save_results, "extract_tables_direct should call save_extraction_results"
         for field, found in field_checks.items():
-            assert found, f"extract_tables_direct should populate {field}"
+            assert found, f"save_extraction_results should populate {field}"
 
     def test_extract_tables_vision_populates_all_fields(self, predict_table_source):
-        """extract_tables_vision should populate all rich fields."""
+        """extract_tables_vision should populate all rich fields.
+
+        Note: After decoupling extraction from saving (Phase 1 architecture refactor),
+        the field population is in save_extraction_results(), which is called by
+        extract_tables_vision().
+        """
         lines = predict_table_source.split('\n')
-        in_function = False
+        in_vision_function = False
+        calls_save_results = False
+        in_save_function = False
         field_checks = {
             'page_type': False,
             'extraction_method': False,
@@ -236,18 +260,29 @@ class TestMetadataFieldsPopulated:
             'bounding_box': False,
         }
 
+        # Check that extract_tables_vision calls save_extraction_results
         for line in lines:
             if 'def extract_tables_vision(' in line:
-                in_function = True
-            elif in_function and line.startswith('def ') and 'extract_tables_vision' not in line:
+                in_vision_function = True
+            elif in_vision_function and line.startswith('def ') and 'extract_tables_vision' not in line:
+                in_vision_function = False
+            elif in_vision_function and 'save_extraction_results' in line:
+                calls_save_results = True
+
+        # Check that save_extraction_results populates all fields
+        for line in lines:
+            if 'def save_extraction_results(' in line:
+                in_save_function = True
+            elif in_save_function and line.startswith('def ') and 'save_extraction_results' not in line:
                 break
-            elif in_function:
+            elif in_save_function:
                 for field in field_checks:
                     if f'{field}=' in line:
                         field_checks[field] = True
 
+        assert calls_save_results, "extract_tables_vision should call save_extraction_results"
         for field, found in field_checks.items():
-            assert found, f"extract_tables_vision should populate {field}"
+            assert found, f"save_extraction_results should populate {field}"
 
 
 # =============================================================================
@@ -390,36 +425,72 @@ class TestXLSXExportInPipeline:
         assert exports_xlsx, "detect_tables should call export_to_xlsx"
 
     def test_extract_tables_direct_exports_xlsx(self, predict_table_source):
-        """extract_tables_direct should export XLSX files."""
+        """extract_tables_direct should export XLSX files.
+
+        Note: After decoupling extraction from saving (Phase 1 architecture refactor),
+        the XLSX export is in save_extraction_results(), which is called by
+        extract_tables_direct().
+        """
         lines = predict_table_source.split('\n')
-        in_function = False
+        in_direct_function = False
+        calls_save_results = False
+        in_save_function = False
         exports_xlsx = False
 
+        # Check that extract_tables_direct calls save_extraction_results
         for line in lines:
             if 'def extract_tables_direct(' in line:
-                in_function = True
-            elif in_function and line.startswith('def ') and 'extract_tables_direct' not in line:
+                in_direct_function = True
+            elif in_direct_function and line.startswith('def ') and 'extract_tables_direct' not in line:
+                in_direct_function = False
+            elif in_direct_function and 'save_extraction_results' in line:
+                calls_save_results = True
+
+        # Check that save_extraction_results exports XLSX
+        for line in lines:
+            if 'def save_extraction_results(' in line:
+                in_save_function = True
+            elif in_save_function and line.startswith('def ') and 'save_extraction_results' not in line:
                 break
-            elif in_function and 'export_to_xlsx' in line:
+            elif in_save_function and 'export_to_xlsx' in line:
                 exports_xlsx = True
 
-        assert exports_xlsx, "extract_tables_direct should call export_to_xlsx"
+        assert calls_save_results, "extract_tables_direct should call save_extraction_results"
+        assert exports_xlsx, "save_extraction_results should call export_to_xlsx"
 
     def test_extract_tables_vision_exports_xlsx(self, predict_table_source):
-        """extract_tables_vision should export XLSX files."""
+        """extract_tables_vision should export XLSX files.
+
+        Note: After decoupling extraction from saving (Phase 1 architecture refactor),
+        the XLSX export is in save_extraction_results(), which is called by
+        extract_tables_vision().
+        """
         lines = predict_table_source.split('\n')
-        in_function = False
+        in_vision_function = False
+        calls_save_results = False
+        in_save_function = False
         exports_xlsx = False
 
+        # Check that extract_tables_vision calls save_extraction_results
         for line in lines:
             if 'def extract_tables_vision(' in line:
-                in_function = True
-            elif in_function and line.startswith('def ') and 'extract_tables_vision' not in line:
+                in_vision_function = True
+            elif in_vision_function and line.startswith('def ') and 'extract_tables_vision' not in line:
+                in_vision_function = False
+            elif in_vision_function and 'save_extraction_results' in line:
+                calls_save_results = True
+
+        # Check that save_extraction_results exports XLSX
+        for line in lines:
+            if 'def save_extraction_results(' in line:
+                in_save_function = True
+            elif in_save_function and line.startswith('def ') and 'save_extraction_results' not in line:
                 break
-            elif in_function and 'export_to_xlsx' in line:
+            elif in_save_function and 'export_to_xlsx' in line:
                 exports_xlsx = True
 
-        assert exports_xlsx, "extract_tables_vision should call export_to_xlsx"
+        assert calls_save_results, "extract_tables_vision should call save_extraction_results"
+        assert exports_xlsx, "save_extraction_results should call export_to_xlsx"
 
 
 # =============================================================================

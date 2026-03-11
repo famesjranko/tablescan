@@ -278,25 +278,45 @@ class TestVisionExtractionFunction:
         assert 'pdf_page2img' not in function_body, "extract_tables_vision should not convert to JPG"
 
     def test_extract_tables_vision_exports_same_format(self, predict_table_source):
-        """Verify extract_tables_vision exports in same format as born-digital."""
+        """Verify extract_tables_vision exports in same format as born-digital.
+
+        Note: After decoupling extraction from saving (Phase 1 architecture refactor),
+        the export logic is in save_extraction_results(), which is called by
+        extract_tables_vision(). We verify that extract_tables_vision calls
+        save_extraction_results which handles the exports.
+        """
         lines = predict_table_source.split('\n')
         in_function = False
+        calls_save_results = False
         exports_csv = False
         exports_json = False
 
+        # Check that extract_tables_vision calls save_extraction_results
         for line in lines:
             if 'def extract_tables_vision(' in line:
                 in_function = True
             elif in_function and line.startswith('def ') and 'extract_tables_vision' not in line:
                 break
             elif in_function:
+                if 'save_extraction_results' in line:
+                    calls_save_results = True
+
+        # Also check that save_extraction_results exports CSV and JSON
+        in_save_function = False
+        for line in lines:
+            if 'def save_extraction_results(' in line:
+                in_save_function = True
+            elif in_save_function and line.startswith('def ') and 'save_extraction_results' not in line:
+                break
+            elif in_save_function:
                 if 'to_csv' in line:
                     exports_csv = True
                 if 'to_json' in line or 'json_lib.dump' in line:
                     exports_json = True
 
-        assert exports_csv, "extract_tables_vision should export CSV"
-        assert exports_json, "extract_tables_vision should export JSON"
+        assert calls_save_results, "extract_tables_vision should call save_extraction_results"
+        assert exports_csv, "save_extraction_results should export CSV"
+        assert exports_json, "save_extraction_results should export JSON"
 
 
 class TestFeatureFlagLoading:

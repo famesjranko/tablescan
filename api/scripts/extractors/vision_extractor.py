@@ -321,14 +321,15 @@ class VisionExtractor(BaseExtractor):
         }
 
         # Add bounding box if available
+        # Convert to Python int to avoid numpy int64 JSON serialization issues
         try:
             bbox = table.bbox
             if bbox:
                 metadata['bounding_box'] = {
-                    'x1': bbox.x1,
-                    'y1': bbox.y1,
-                    'x2': bbox.x2,
-                    'y2': bbox.y2
+                    'x1': int(bbox.x1),
+                    'y1': int(bbox.y1),
+                    'x2': int(bbox.x2),
+                    'y2': int(bbox.y2)
                 }
         except Exception:
             pass

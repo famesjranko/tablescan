@@ -571,37 +571,70 @@ class TestVisionExtractionCodeStructure:
         assert "ExtractionScorer" in predict_table_source or "scorer" in predict_table_source.lower()
 
     def test_extract_tables_vision_exports_csv(self, predict_table_source):
-        """extract_tables_vision should export CSV."""
-        # Find the function and check for CSV export
+        """extract_tables_vision should export CSV.
+
+        Note: After decoupling extraction from saving (Phase 1 architecture refactor),
+        the export logic is in save_extraction_results(), which is called by
+        extract_tables_vision().
+        """
         lines = predict_table_source.split('\n')
-        in_function = False
+        in_vision_function = False
+        calls_save_results = False
+        in_save_function = False
         exports_csv = False
 
+        # Check that extract_tables_vision calls save_extraction_results
         for line in lines:
             if 'def extract_tables_vision(' in line:
-                in_function = True
-            elif in_function and line.startswith('def ') and 'extract_tables_vision' not in line:
+                in_vision_function = True
+            elif in_vision_function and line.startswith('def ') and 'extract_tables_vision' not in line:
+                in_vision_function = False
+            elif in_vision_function and 'save_extraction_results' in line:
+                calls_save_results = True
+
+        # Check that save_extraction_results exports CSV
+        for line in lines:
+            if 'def save_extraction_results(' in line:
+                in_save_function = True
+            elif in_save_function and line.startswith('def ') and 'save_extraction_results' not in line:
                 break
-            elif in_function and 'to_csv' in line:
+            elif in_save_function and 'to_csv' in line:
                 exports_csv = True
 
-        assert exports_csv, "extract_tables_vision should export CSV"
+        assert calls_save_results or exports_csv, "extract_tables_vision should export CSV (via save_extraction_results)"
 
     def test_extract_tables_vision_exports_json(self, predict_table_source):
-        """extract_tables_vision should export JSON."""
+        """extract_tables_vision should export JSON.
+
+        Note: After decoupling extraction from saving (Phase 1 architecture refactor),
+        the export logic is in save_extraction_results(), which is called by
+        extract_tables_vision().
+        """
         lines = predict_table_source.split('\n')
-        in_function = False
+        in_vision_function = False
+        calls_save_results = False
+        in_save_function = False
         exports_json = False
 
+        # Check that extract_tables_vision calls save_extraction_results
         for line in lines:
             if 'def extract_tables_vision(' in line:
-                in_function = True
-            elif in_function and line.startswith('def ') and 'extract_tables_vision' not in line:
+                in_vision_function = True
+            elif in_vision_function and line.startswith('def ') and 'extract_tables_vision' not in line:
+                in_vision_function = False
+            elif in_vision_function and 'save_extraction_results' in line:
+                calls_save_results = True
+
+        # Check that save_extraction_results exports JSON
+        for line in lines:
+            if 'def save_extraction_results(' in line:
+                in_save_function = True
+            elif in_save_function and line.startswith('def ') and 'save_extraction_results' not in line:
                 break
-            elif in_function and ('to_json' in line or 'json_lib.dump' in line):
+            elif in_save_function and ('to_json' in line or 'json_lib.dump' in line):
                 exports_json = True
 
-        assert exports_json, "extract_tables_vision should export JSON"
+        assert calls_save_results or exports_json, "extract_tables_vision should export JSON (via save_extraction_results)"
 
     def test_vision_extractor_uses_img2table(self, vision_extractor_source):
         """VisionExtractor should use img2table library."""

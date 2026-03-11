@@ -504,6 +504,7 @@ class TestExtractionScorerInit:
         scorer = ExtractionScorer()
 
         total = (
+            scorer._confidence_weight +
             scorer._coverage_weight +
             scorer._regularity_weight +
             scorer._numeric_weight +
@@ -515,18 +516,20 @@ class TestExtractionScorerInit:
     def test_custom_weights_accepted(self):
         """Custom weights summing to 1.0 should be accepted."""
         scorer = ExtractionScorer(
-            coverage_weight=0.4,
-            regularity_weight=0.4,
+            confidence_weight=0.3,
+            coverage_weight=0.3,
+            regularity_weight=0.2,
             numeric_weight=0.1,
             header_weight=0.1
         )
 
-        assert scorer._coverage_weight == 0.4
+        assert scorer._coverage_weight == 0.3
 
     def test_invalid_weights_raise_error(self):
         """Weights not summing to 1.0 should raise ValueError."""
         with pytest.raises(ValueError, match="sum to 1.0"):
             ExtractionScorer(
+                confidence_weight=0.5,
                 coverage_weight=0.5,
                 regularity_weight=0.5,
                 numeric_weight=0.5,

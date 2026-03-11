@@ -20,6 +20,7 @@ class ExtractionScorer:
     Scores and ranks table extraction results.
 
     Evaluates extraction quality using multiple metrics:
+    - Extractor confidence: the extractor's own confidence score (most important)
     - Cell coverage: percentage of non-empty cells
     - Structure regularity: consistency of row/column structure
     - Numeric integrity: validity of numeric values
@@ -28,10 +29,11 @@ class ExtractionScorer:
     All scores are normalized to 0-1 range.
 
     Attributes:
-        coverage_weight: Weight for cell coverage score (default 0.3).
-        regularity_weight: Weight for structure regularity score (default 0.3).
-        numeric_weight: Weight for numeric integrity score (default 0.2).
-        header_weight: Weight for header detection score (default 0.2).
+        confidence_weight: Weight for extractor confidence (default 0.4).
+        coverage_weight: Weight for cell coverage score (default 0.2).
+        regularity_weight: Weight for structure regularity score (default 0.2).
+        numeric_weight: Weight for numeric integrity score (default 0.1).
+        header_weight: Weight for header detection score (default 0.1).
     """
 
     # Regex patterns for numeric detection
@@ -43,15 +45,17 @@ class ExtractionScorer:
 
     def __init__(
         self,
-        coverage_weight: float = 0.3,
-        regularity_weight: float = 0.3,
-        numeric_weight: float = 0.2,
-        header_weight: float = 0.2
+        confidence_weight: float = 0.4,
+        coverage_weight: float = 0.2,
+        regularity_weight: float = 0.2,
+        numeric_weight: float = 0.1,
+        header_weight: float = 0.1
     ):
         """
         Initialize ExtractionScorer with custom weights.
 
         Args:
+            confidence_weight: Weight for extractor's own confidence score.
             coverage_weight: Weight for cell coverage score.
             regularity_weight: Weight for structure regularity score.
             numeric_weight: Weight for numeric integrity score.
@@ -60,10 +64,11 @@ class ExtractionScorer:
         Raises:
             ValueError: If weights don't sum to 1.0 (within tolerance).
         """
-        total = coverage_weight + regularity_weight + numeric_weight + header_weight
+        total = confidence_weight + coverage_weight + regularity_weight + numeric_weight + header_weight
         if abs(total - 1.0) > 0.01:
             raise ValueError(f"Weights must sum to 1.0, got {total}")
 
+        self._confidence_weight = confidence_weight
         self._coverage_weight = coverage_weight
         self._regularity_weight = regularity_weight
         self._numeric_weight = numeric_weight
@@ -98,13 +103,15 @@ class ExtractionScorer:
             return 0.0
 
         # Calculate individual scores
+        confidence = result.confidence if result.confidence else 0.5
         coverage = self._score_coverage(df, page_text)
         regularity = self._score_regularity(df)
         numeric = self._score_numeric_integrity(df)
         header = self._score_header_detection(df, result.metadata)
 
-        # Weighted combination
+        # Weighted combination (confidence is most important)
         final_score = (
+            self._confidence_weight * confidence +
             self._coverage_weight * coverage +
             self._regularity_weight * regularity +
             self._numeric_weight * numeric +
