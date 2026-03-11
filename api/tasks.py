@@ -44,6 +44,17 @@ def extract_tables_task(self, report_id, file_path, start_page, end_page,
     start = timer()
 
     try:
+        # Validate report exists before processing (handles stale tasks after rebuild)
+        try:
+            report = Report.objects.get(id=report_id)
+        except Report.DoesNotExist:
+            log.output("WARNING", f"[Task {self.request.id}] Report {report_id} not found - stale task, skipping")
+            return {
+                'status': 'skipped',
+                'report_id': report_id,
+                'reason': 'Report no longer exists (stale task)'
+            }
+
         log.output("INFO", f"[Task {self.request.id}] Starting extraction for report {report_id}")
         log.output("INFO", f"[Task {self.request.id}] Options: flavor={flavor}, merge_headers={merge_headers}")
 
@@ -54,11 +65,20 @@ def extract_tables_task(self, report_id, file_path, start_page, end_page,
             'status': 'Loading PDF document...'
         })
 
+        # Progress callback for status updates during extraction
+        def update_progress(percent, status):
+            self.update_state(state='PROGRESS', meta={
+                'current': percent,
+                'total': 100,
+                'status': status
+            })
+
         # Run extraction with options
         extracted = table_extract.extract(
             file_path, start_page, end_page,
             flavor=flavor, row_tol=row_tol, strip_text=strip_text,
-            merge_headers=merge_headers
+            merge_headers=merge_headers, report_id=report_id,
+            progress_callback=update_progress
         )
 
         # Update progress to complete

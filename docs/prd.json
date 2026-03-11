@@ -1,0 +1,285 @@
+{
+  "project": "TableScan 2.0",
+  "description": "Modernize PDF table extraction with routing, multi-extractor scoring, and rich output",
+  "repository": "/home/andy/automated-PDF-tabulated-data-extractor-api",
+  "userStories": [
+    {
+      "id": "US-001",
+      "phase": 1,
+      "title": "Add PyMuPDF dependency",
+      "description": "Add pymupdf to requirements.txt and verify it installs correctly",
+      "acceptanceCriteria": [
+        "pymupdf>=1.23.0 added to requirements.txt",
+        "pip install -r requirements.txt succeeds",
+        "python -c 'import fitz; print(fitz.version)' works"
+      ],
+      "passes": true
+    },
+    {
+      "id": "US-002",
+      "phase": 1,
+      "title": "Create PageClassifier class",
+      "description": "Create api/scripts/page_classifier.py with classify() method using PyMuPDF",
+      "acceptanceCriteria": [
+        "File api/scripts/page_classifier.py exists",
+        "PageClassifier class with classify(pdf_path, page_num) method",
+        "Returns PageClassification with type ('born_digital'|'scanned'|'mixed'), text_coverage (0-1), has_images (bool)",
+        "Uses PyMuPDF to extract text blocks and calculate coverage ratio",
+        "Classification completes in <100ms per page"
+      ],
+      "passes": true
+    },
+    {
+      "id": "US-003",
+      "phase": 1,
+      "title": "Unit tests for PageClassifier",
+      "description": "Create tests for page classification with sample PDFs",
+      "acceptanceCriteria": [
+        "Test file api/tests/test_page_classifier.py exists",
+        "Tests classify born-digital PDF correctly",
+        "Tests classify scanned PDF correctly (if sample available, else mock)",
+        "Tests performance requirement (<100ms)",
+        "All tests pass with pytest"
+      ],
+      "passes": true
+    },
+    {
+      "id": "US-004",
+      "phase": 1,
+      "title": "Add routing logic to table_extract.py",
+      "description": "Integrate PageClassifier into extraction pipeline with conditional routing",
+      "acceptanceCriteria": [
+        "table_extract.py imports and uses PageClassifier",
+        "Born-digital pages skip YOLO detection and JPG conversion",
+        "Born-digital pages go directly to Camelot extraction",
+        "Scanned pages continue through existing YOLO pipeline",
+        "Page type logged for each page processed"
+      ],
+      "passes": true
+    },
+    {
+      "id": "US-005",
+      "phase": 1,
+      "title": "Verify Phase 1 end-to-end",
+      "description": "Test full pipeline with routing on real PDFs",
+      "acceptanceCriteria": [
+        "Upload a born-digital PDF via API - extraction succeeds",
+        "Processing time measurably faster than before (no JPG conversion)",
+        "Upload works through both sync and async endpoints",
+        "No regressions on existing functionality"
+      ],
+      "passes": true
+    },
+    {
+      "id": "US-006",
+      "phase": 2,
+      "title": "Create extractors module structure",
+      "description": "Create api/scripts/extractors/ module with base class",
+      "acceptanceCriteria": [
+        "Directory api/scripts/extractors/ exists",
+        "api/scripts/extractors/__init__.py exists",
+        "api/scripts/extractors/base.py with BaseExtractor ABC",
+        "ExtractionResult dataclass with dataframe, confidence, method, metadata fields",
+        "BaseExtractor has abstract extract() and name() methods"
+      ],
+      "passes": true
+    },
+    {
+      "id": "US-007",
+      "phase": 2,
+      "title": "Create CamelotExtractor",
+      "description": "Refactor Camelot logic from predict_table.py into extractor class",
+      "acceptanceCriteria": [
+        "api/scripts/extractors/camelot_extractor.py exists",
+        "CamelotExtractor extends BaseExtractor",
+        "Supports both 'lattice' and 'stream' flavors",
+        "Returns confidence from Camelot parsing report",
+        "Works standalone: can extract tables from a PDF page"
+      ],
+      "passes": true
+    },
+    {
+      "id": "US-008",
+      "phase": 2,
+      "title": "Add pdfplumber dependency and extractor",
+      "description": "Add pdfplumber and create PdfplumberExtractor",
+      "acceptanceCriteria": [
+        "pdfplumber>=0.10.0 added to requirements.txt",
+        "api/scripts/extractors/pdfplumber_extractor.py exists",
+        "PdfplumberExtractor extends BaseExtractor",
+        "Can extract tables from a PDF page",
+        "Returns confidence score based on table detection quality"
+      ],
+      "passes": true
+    },
+    {
+      "id": "US-009",
+      "phase": 2,
+      "title": "Create ExtractionScorer",
+      "description": "Create scorer to compare and rank extraction results",
+      "acceptanceCriteria": [
+        "api/scripts/extractors/scorer.py exists",
+        "ExtractionScorer class with score() method",
+        "Evaluates: cell coverage, structure regularity, numeric integrity",
+        "select_best() method returns highest-scoring ExtractionResult",
+        "Scores are normalized 0-1"
+      ],
+      "passes": true
+    },
+    {
+      "id": "US-010",
+      "phase": 2,
+      "title": "Integrate multi-extractor into pipeline",
+      "description": "Update extraction pipeline to run multiple extractors and pick best",
+      "acceptanceCriteria": [
+        "Born-digital extraction runs both Camelot and pdfplumber",
+        "Scorer selects best result per table",
+        "Extraction method recorded in output",
+        "Falls back gracefully if one extractor fails",
+        "Existing API responses unchanged (backwards compatible)"
+      ],
+      "passes": true
+    },
+    {
+      "id": "US-011",
+      "phase": 2,
+      "title": "Unit tests for extractors and scorer",
+      "description": "Create tests for extractor module",
+      "acceptanceCriteria": [
+        "api/tests/test_extractors.py exists",
+        "Tests CamelotExtractor extraction",
+        "Tests PdfplumberExtractor extraction",
+        "Tests ExtractionScorer scoring and selection",
+        "All tests pass with pytest"
+      ],
+      "passes": true
+    },
+    {
+      "id": "US-012",
+      "phase": 2,
+      "title": "Verify Phase 2 end-to-end",
+      "description": "Test multi-extractor pipeline on real PDFs",
+      "acceptanceCriteria": [
+        "Upload PDF - multiple extractors run (visible in logs)",
+        "Best result selected and returned",
+        "Accuracy same or better than single-extractor",
+        "No performance regression (parallel extraction if needed)"
+      ],
+      "passes": true
+    },
+    {
+      "id": "US-013",
+      "phase": 3,
+      "title": "Add img2table dependency and extractor",
+      "description": "Add lightweight vision-based table detector for scanned PDFs",
+      "acceptanceCriteria": [
+        "img2table>=1.2.0 added to requirements.txt",
+        "api/scripts/extractors/vision_extractor.py exists",
+        "VisionExtractor extends BaseExtractor",
+        "Can detect and extract tables from image-based PDF pages",
+        "Works on CPU (no GPU required)"
+      ],
+      "passes": true
+    },
+    {
+      "id": "US-014",
+      "phase": 3,
+      "title": "Route scanned pages to vision extractor",
+      "description": "Update routing to use VisionExtractor for scanned pages",
+      "acceptanceCriteria": [
+        "Scanned pages (from PageClassifier) route to VisionExtractor",
+        "YOLO pipeline can be bypassed via feature flag",
+        "Extraction results scored and selected same as born-digital",
+        "Graceful fallback to YOLO if VisionExtractor fails"
+      ],
+      "passes": true
+    },
+    {
+      "id": "US-015",
+      "phase": 3,
+      "title": "Verify Phase 3 end-to-end",
+      "description": "Test vision extraction on scanned PDFs",
+      "acceptanceCriteria": [
+        "Upload scanned PDF - VisionExtractor processes it",
+        "Tables extracted successfully",
+        "Quality comparable to or better than YOLO pipeline",
+        "Feature flag can disable YOLO entirely"
+      ],
+      "passes": true
+    },
+    {
+      "id": "US-016",
+      "phase": 4,
+      "title": "Add rich fields to Extracted model",
+      "description": "Add new database fields for extraction metadata",
+      "acceptanceCriteria": [
+        "Migration adds: page_type, extraction_method, confidence_score, structure_json, bounding_box",
+        "Fields are nullable for backwards compatibility",
+        "makemigrations and migrate succeed",
+        "Existing data unaffected"
+      ],
+      "passes": true
+    },
+    {
+      "id": "US-017",
+      "phase": 4,
+      "title": "Populate rich fields during extraction",
+      "description": "Update extraction pipeline to save metadata to new fields",
+      "acceptanceCriteria": [
+        "page_type saved from PageClassifier result",
+        "extraction_method saved from winning extractor",
+        "confidence_score saved from scorer",
+        "structure_json contains cell-level data with spans if detected",
+        "bounding_box saved from detection"
+      ],
+      "passes": true
+    },
+    {
+      "id": "US-018",
+      "phase": 4,
+      "title": "Add XLSX export with cell spans",
+      "description": "Add openpyxl and create XLSX export preserving structure",
+      "acceptanceCriteria": [
+        "openpyxl>=3.1.0 added to requirements.txt",
+        "XLSX export created alongside CSV/JSON",
+        "Merged cells preserved in XLSX when structure_json has spans",
+        "Header rows formatted distinctly",
+        "Extracted model updated to include xlsx file reference"
+      ],
+      "passes": true
+    },
+    {
+      "id": "US-019",
+      "phase": 4,
+      "title": "Update API responses with metadata",
+      "description": "Include extraction metadata in API responses",
+      "acceptanceCriteria": [
+        "Serializer includes page_type, extraction_method, confidence_score",
+        "GET /api/reports/{id}/ returns metadata for each extracted table",
+        "Backwards compatible - new fields are additive",
+        "API documentation updated if exists"
+      ],
+      "passes": true
+    },
+    {
+      "id": "US-020",
+      "phase": 4,
+      "title": "Verify Phase 4 end-to-end",
+      "description": "Full system test with rich output",
+      "acceptanceCriteria": [
+        "Upload PDF - all metadata fields populated",
+        "XLSX download works with proper formatting",
+        "API returns confidence scores",
+        "All existing tests still pass"
+      ],
+      "passes": true
+    }
+  ],
+  "featureFlags": {
+    "use_page_classifier": true,
+    "use_multi_extractor": true,
+    "use_vision_detector": true,
+    "use_rich_schema": false,
+    "legacy_yolo_enabled": true
+  }
+}

@@ -156,7 +156,7 @@ class UploadView(APIView):
         log = Logging()
 
         # create Report database model instance with owner
-        report_serializer.save(owner=request.user)
+        report = report_serializer.save(owner=request.user)
 
         # uploaded file url location
         file_url = report_serializer.data["document"]
@@ -174,11 +174,10 @@ class UploadView(APIView):
         file_name = full_path.name
         file_path = PurePath(media_root_dir, base_dir, file_name)
 
-        # get newly created Report db instance and update name and file_type fields
-        r = Report.objects.get(document__endswith=file_name)
-        r.name = base_dir
-        r.f_type = file_name.split(".")[1]
-        r.save()
+        # update report name and file_type fields
+        report.name = base_dir
+        report.f_type = file_name.split(".")[1]
+        report.save()
 
         # clean media root of any empty folders
         log.output("INFO", "cleaning /documents of empty directories")
@@ -199,7 +198,7 @@ class UploadView(APIView):
             # run extraction script, set output_type: ['json','csv','xlsx', 'all']
             # 'all' currently only set to json, csv
             # returns dictionary
-            extracted = table_extract.extract(file_path, start_page, end_page)
+            extracted = table_extract.extract(file_path, start_page, end_page, report_id=report.id)
 
         except Exception as e:
             error_output = "".join(["Extraction script: ", str(e)])
@@ -444,9 +443,9 @@ class UploadAsyncView(LoginRequiredMixin, View):
         if not report_serializer.is_valid():
             return JsonResponse({'error': 'Invalid data'}, status=400)
 
-        report_serializer.save(owner=request.user)
+        report = report_serializer.save(owner=request.user)
 
-        # Get the saved report
+        # Get file path from saved report
         file_url = report_serializer.data['document']
         full_path = Path(file_url)
         base_dir = full_path.parts[3]
@@ -454,7 +453,6 @@ class UploadAsyncView(LoginRequiredMixin, View):
         file_path = str(PurePath(settings.MEDIA_ROOT, base_dir, file_name))
 
         # Update report with name and type
-        report = Report.objects.get(document__endswith=file_name)
         report.name = base_dir
         report.f_type = file_name.split('.')[1]
         report.save()

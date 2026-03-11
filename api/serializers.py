@@ -29,7 +29,17 @@ class ExtractedSerializer(serializers.HyperlinkedModelSerializer):
 
     class Meta:
         model = Extracted
-        fields = ("report", "page_num", "table_num", "f_type", "file")
+        fields = (
+            "report",
+            "page_num",
+            "table_num",
+            "f_type",
+            "file",
+            # Rich metadata fields (US-019)
+            "page_type",
+            "extraction_method",
+            "confidence_score",
+        )
 
 
 class ReportSerializer2(serializers.ModelSerializer):
@@ -60,11 +70,21 @@ class ReportSerializer2(serializers.ModelSerializer):
 class ExtractedSerializer2(serializers.HyperlinkedModelSerializer):
     """
     Extracted Model Serializer 2
+    Used by ReportSerializer for nested extracted table data
     """
 
     class Meta:
         model = Extracted
-        fields = ("page_num", "table_num", "f_type", "file")
+        fields = (
+            "page_num",
+            "table_num",
+            "f_type",
+            "file",
+            # Rich metadata fields (US-019)
+            "page_type",
+            "extraction_method",
+            "confidence_score",
+        )
 
 
 class ReportSerializer(serializers.ModelSerializer):

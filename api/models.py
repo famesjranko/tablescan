@@ -17,7 +17,7 @@ from django.db import models
 from django.db.models.deletion import SET_DEFAULT
 from django.contrib.auth.models import User
 
-from django.utils.encoding import force_text
+from django.utils.encoding import force_str
 import re
 
 from pathlib import PurePath
@@ -56,7 +56,7 @@ def get_valid_filename(s):
     >>> get_valid_filename("john's portrait in 2004.jpg")
     'johns_portrait_in_2004.jpg'
     """
-    s = force_text(s).strip().replace(" ", "_")
+    s = force_str(s).strip().replace(" ", "_")
     return re.sub(r"(?u)[^-\w.]", "", s)
 
 
@@ -123,6 +123,13 @@ class Extracted(models.Model):
     # The second element is displayed by the field’s form widget.
     FILE_CHOICES = ((".csv", "CSV"), (".json", "JSON"), (".xlsx", "XLSX"))
 
+    # Page type choices for classification
+    PAGE_TYPE_CHOICES = (
+        ("born_digital", "Born Digital"),
+        ("scanned", "Scanned"),
+        ("mixed", "Mixed"),
+    )
+
     report = models.ForeignKey(
         Report,
         db_column="document",
@@ -144,6 +151,36 @@ class Extracted(models.Model):
         blank=True,
     )
     f_type = models.CharField(max_length=5, null=True, blank=True, choices=FILE_CHOICES)
+
+    # Rich metadata fields (US-016)
+    page_type = models.CharField(
+        max_length=20,
+        null=True,
+        blank=True,
+        choices=PAGE_TYPE_CHOICES,
+        help_text="Classification of the source page: born_digital, scanned, or mixed",
+    )
+    extraction_method = models.CharField(
+        max_length=50,
+        null=True,
+        blank=True,
+        help_text="Method used to extract the table (e.g., camelot-lattice, pdfplumber)",
+    )
+    confidence_score = models.FloatField(
+        null=True,
+        blank=True,
+        help_text="Extraction confidence score from 0.0 to 1.0",
+    )
+    structure_json = models.JSONField(
+        null=True,
+        blank=True,
+        help_text="Rich schema with cell-level data including spans",
+    )
+    bounding_box = models.JSONField(
+        null=True,
+        blank=True,
+        help_text="Table location as {x0, y0, x1, y1} coordinates",
+    )
 
     def __str__(self):
         return "%s %s %s %s %s" % (

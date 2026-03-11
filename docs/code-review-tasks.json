@@ -1,0 +1,249 @@
+{
+  "project": "TableScan 2.0 - Code Review",
+  "description": "Address code review findings from PR #1 modernization",
+  "repository": "/home/andy/automated-PDF-tabulated-data-extractor-api",
+  "commitPrefix": "fix",
+  "workflow": {
+    "1-Review": "Read files and understand current implementation",
+    "2-Evaluate": "Is this valid, a false positive, or intentional design?",
+    "3-Decide": "FIX, SKIP (with justification), or ALTERNATIVE",
+    "4-Implement": "If fixing, make minimal focused changes",
+    "5-Document": "Log decision and rationale to progress file"
+  },
+  "userStories": [
+    {
+      "id": "CR-001",
+      "phase": 1,
+      "priority": "high",
+      "title": "Consolidate duplicate build_structure_json function",
+      "description": "The same function exists in two places: predict_table.py:64-120 and xlsx_exporter.py:172-228 (as build_xlsx_structure_from_extraction). Consolidate into one location and import where needed.",
+      "reviewQuestions": [
+        "Are these functions actually identical or do they have subtle differences?",
+        "Is the duplication intentional to avoid circular imports?",
+        "Would consolidating create unwanted coupling between modules?",
+        "Are there different callers with different expectations?"
+      ],
+      "acceptanceCriteria": [
+        "REVIEW: Compare both functions side-by-side for differences",
+        "EVALUATE: Determine if consolidation is safe or if duplication is intentional",
+        "DECIDE: Document decision in progress file with rationale",
+        "IF FIXING: Single canonical function, both files import from it, all tests pass",
+        "IF SKIPPING: Document why duplication should remain (e.g., avoiding coupling)"
+      ],
+      "files": [
+        "api/scripts/YOLOV3/predict_table.py",
+        "api/scripts/xlsx_exporter.py"
+      ],
+      "passes": true
+    },
+    {
+      "id": "CR-002",
+      "phase": 1,
+      "priority": "high",
+      "title": "Fix dead code in __main__ block",
+      "description": "predict_table.py:925-928 has 'if __name__ == \"__main__\": detect_tables()' which will fail without arguments. Either add argparse for CLI usage or remove the dead code.",
+      "reviewQuestions": [
+        "Is this __main__ block used for debugging/development?",
+        "Are there other scripts that call this file directly?",
+        "Would removing it break any workflows or documentation?",
+        "Is there value in making this a CLI tool?"
+      ],
+      "acceptanceCriteria": [
+        "REVIEW: Check if __main__ is referenced anywhere (scripts, docs, Makefile)",
+        "EVALUATE: Determine if CLI functionality would be useful or if it's truly dead code",
+        "DECIDE: Document decision in progress file with rationale",
+        "IF ADDING CLI: argparse with --pdf, --page, --help works correctly",
+        "IF REMOVING: Delete __main__ block, verify no breakage",
+        "IF KEEPING AS-IS: Document why (e.g., developer convenience placeholder)"
+      ],
+      "files": [
+        "api/scripts/YOLOV3/predict_table.py"
+      ],
+      "passes": true
+    },
+    {
+      "id": "CR-003",
+      "phase": 1,
+      "priority": "high",
+      "title": "Add multi-page PDF test coverage",
+      "description": "PR checklist shows unchecked items for multi-page PDF extraction testing. Add integration tests that verify extraction works correctly across multiple pages.",
+      "reviewQuestions": [
+        "Do existing tests already cover multi-page scenarios indirectly?",
+        "Is the multipage_table_pdf fixture in test_extractors.py sufficient?",
+        "What specific multi-page edge cases need coverage?",
+        "Is this a test gap or is multi-page tested elsewhere?"
+      ],
+      "acceptanceCriteria": [
+        "REVIEW: Search existing tests for multi-page coverage",
+        "EVALUATE: Identify actual test gaps vs already-covered scenarios",
+        "DECIDE: Document what tests are needed (if any) in progress file",
+        "IF ADDING TESTS: Cover pages with/without tables, correct page_num metadata",
+        "IF SUFFICIENT: Document why existing coverage is adequate"
+      ],
+      "files": [
+        "api/tests/test_extractors.py",
+        "api/tests/test_phase2_e2e.py"
+      ],
+      "passes": true
+    },
+    {
+      "id": "CR-004",
+      "phase": 2,
+      "priority": "medium",
+      "title": "Improve exception handling specificity",
+      "description": "Several places catch broad Exception and return empty results silently. Add logging and consider catching specific exceptions. Files: vision_extractor.py:132-134, camelot_extractor.py:125-130, pdfplumber_extractor.py:147-149.",
+      "reviewQuestions": [
+        "Is catching broad Exception intentional for graceful degradation?",
+        "Would specific exceptions cause more harm (missed edge cases)?",
+        "Is logging already happening at a higher level?",
+        "Would adding logging create noise in normal operation?"
+      ],
+      "acceptanceCriteria": [
+        "REVIEW: Trace exception handling through the call stack",
+        "EVALUATE: Determine if broad catch is a valid design choice for resilience",
+        "DECIDE: Document decision in progress file with rationale",
+        "IF IMPROVING: Add logging, catch specific exceptions where safe",
+        "IF KEEPING: Document why broad exception handling is appropriate here"
+      ],
+      "files": [
+        "api/scripts/extractors/vision_extractor.py",
+        "api/scripts/extractors/camelot_extractor.py",
+        "api/scripts/extractors/pdfplumber_extractor.py"
+      ],
+      "passes": true
+    },
+    {
+      "id": "CR-005",
+      "phase": 2,
+      "priority": "medium",
+      "title": "Optimize _score_regularity performance",
+      "description": "scorer.py:257-261 uses df.iterrows() which is slow for large tables. Refactor to use vectorized pandas operations for better performance on large DataFrames.",
+      "reviewQuestions": [
+        "How large are typical extracted tables? Is this actually a bottleneck?",
+        "Would vectorization make the code less readable?",
+        "Are there other iterrows() calls that should also be optimized?",
+        "Is premature optimization a concern here?"
+      ],
+      "acceptanceCriteria": [
+        "REVIEW: Check typical table sizes in real usage",
+        "EVALUATE: Benchmark current performance - is this actually slow?",
+        "DECIDE: Document decision in progress file with rationale",
+        "IF OPTIMIZING: Vectorize, verify same results, measure improvement",
+        "IF SKIPPING: Document why optimization isn't needed (e.g., tables are small)"
+      ],
+      "files": [
+        "api/scripts/extractors/scorer.py",
+        "api/tests/test_extractors.py"
+      ],
+      "passes": true
+    },
+    {
+      "id": "CR-006",
+      "phase": 2,
+      "priority": "medium",
+      "title": "Clean up unused parameters in extract_tables_vision",
+      "description": "predict_table.py:867-870 extract_tables_vision() accepts flavor and row_tol parameters but never uses them. Either use them or document why they exist (API compatibility) more clearly.",
+      "reviewQuestions": [
+        "Are these parameters for API consistency with extract_tables_direct?",
+        "Could future vision extractors use these parameters?",
+        "Would removing them break any callers?",
+        "Is the current comment sufficient documentation?"
+      ],
+      "acceptanceCriteria": [
+        "REVIEW: Check all callers of extract_tables_vision",
+        "EVALUATE: Determine if parameters serve API consistency purpose",
+        "DECIDE: Document decision in progress file with rationale",
+        "IF REMOVING: Update all callers, verify no breakage",
+        "IF KEEPING: Add clear docstring explaining they're for API compatibility"
+      ],
+      "files": [
+        "api/scripts/YOLOV3/predict_table.py"
+      ],
+      "passes": true
+    },
+    {
+      "id": "CR-007",
+      "phase": 3,
+      "priority": "low",
+      "title": "Document magic numbers in scorer.py",
+      "description": "scorer.py has several unexplained constants: weight tolerance 0.01 (line 68), text capture multiplier 2 and ratio 0.7/0.3 (line 215), structure weights (lines 270-274). Add comments explaining the rationale.",
+      "reviewQuestions": [
+        "Are these values empirically tuned or arbitrary?",
+        "Would extracting to named constants reduce readability?",
+        "Is this over-documentation for self-evident values?",
+        "Do similar libraries use similar values?"
+      ],
+      "acceptanceCriteria": [
+        "REVIEW: Understand what each constant does and why",
+        "EVALUATE: Determine if documentation adds value or is noise",
+        "DECIDE: Document decision in progress file with rationale",
+        "IF DOCUMENTING: Add concise comments explaining rationale",
+        "IF SKIPPING: Document why values are self-evident or standard"
+      ],
+      "files": [
+        "api/scripts/extractors/scorer.py"
+      ],
+      "passes": true
+    },
+    {
+      "id": "CR-008",
+      "phase": 3,
+      "priority": "low",
+      "title": "Add missing type annotations",
+      "description": "Some functions lack complete type annotations. Add type hints to: collect_result() at table_extract.py:574, collect_parsing_report() at line 594, and other untyped parameters.",
+      "reviewQuestions": [
+        "Is the codebase consistently typed or mostly untyped?",
+        "Would adding types to just these functions be inconsistent?",
+        "Are these internal functions that don't need strict typing?",
+        "Would this trigger a larger typing effort?"
+      ],
+      "acceptanceCriteria": [
+        "REVIEW: Assess typing consistency across codebase",
+        "EVALUATE: Determine if selective typing adds value or creates inconsistency",
+        "DECIDE: Document decision in progress file with rationale",
+        "IF ADDING: Add accurate type hints that would pass mypy",
+        "IF SKIPPING: Document why (e.g., codebase isn't typed, would be inconsistent)"
+      ],
+      "files": [
+        "api/scripts/table_extract.py"
+      ],
+      "passes": true
+    },
+    {
+      "id": "CR-009",
+      "phase": 3,
+      "priority": "low",
+      "title": "Consolidate flavor auto-detection logic",
+      "description": "Both detect_tables() (YOLO path) and MultiExtractor have similar logic for comparing lattice vs stream extraction results. Consider extracting this into a shared utility function.",
+      "reviewQuestions": [
+        "Are the two implementations actually similar or subtly different?",
+        "Would a shared utility create unwanted coupling?",
+        "Is the duplication acceptable for code clarity?",
+        "Would refactoring make the code harder to follow?"
+      ],
+      "acceptanceCriteria": [
+        "REVIEW: Compare both implementations side-by-side",
+        "EVALUATE: Determine if consolidation improves or harms maintainability",
+        "DECIDE: Document decision in progress file with rationale",
+        "IF CONSOLIDATING: Extract shared utility, update both callers, all tests pass",
+        "IF SKIPPING: Document why separation is preferred (e.g., different contexts)"
+      ],
+      "files": [
+        "api/scripts/YOLOV3/predict_table.py",
+        "api/scripts/extractors/multi_extractor.py"
+      ],
+      "passes": true
+    }
+  ],
+  "phases": {
+    "1": "High Priority - Must fix before merge",
+    "2": "Medium Priority - Should fix",
+    "3": "Low Priority - Nice to have"
+  },
+  "decisionTypes": {
+    "FIX": "Issue is valid, implementing the fix",
+    "SKIP": "Issue is a false positive or intentional design choice",
+    "ALTERNATIVE": "Issue is valid but implementing a different solution",
+    "DEFER": "Issue is valid but should be addressed separately"
+  }
+}

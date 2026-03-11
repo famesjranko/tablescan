@@ -1,4 +1,4 @@
-FROM python:3.9-slim
+FROM python:3.11-slim
 
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1
@@ -13,6 +13,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     poppler-utils \
     # Ghostscript for PDF processing
     ghostscript \
+    # Tesseract OCR for img2table
+    tesseract-ocr \
+    tesseract-ocr-eng \
     # OpenCV dependencies
     libgl1 \
     libglib2.0-0 \
@@ -25,8 +28,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies with pip cache
+# Use CPU-only PyTorch to save ~2GB (no CUDA needed for this project)
 COPY requirements.txt .
 RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu && \
     pip install -r requirements.txt
 
 # Copy project files
