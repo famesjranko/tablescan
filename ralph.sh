@@ -182,14 +182,18 @@ $CUSTOM_WORKFLOW"
   TASK_PROMPT="$TASK_PROMPT
 
 ## Required Steps
-1. Implement ONLY task $NEXT_STORY
-2. Follow existing code patterns
-3. Test your changes work
-4. Commit: $COMMIT_PREFIX($NEXT_STORY): $STORY_TITLE
-5. Log summary to $PROGRESS_FILE
-6. LAST: Set passes: true in $PRD_FILE (triggers session end)
+1. REVIEW: Read and understand the task and relevant code
+2. DECIDE: Choose FIX, SKIP, or ALTERNATIVE (decide BEFORE making any changes)
+3. If SKIP: Document reason in $PROGRESS_FILE, then set passes: true
+4. If FIX/ALTERNATIVE:
+   a. Implement the changes
+   b. Test your changes work
+   c. Commit: $COMMIT_PREFIX($NEXT_STORY): $STORY_TITLE
+   d. Log summary to $PROGRESS_FILE
+   e. Set passes: true in $PRD_FILE
 
-IMPORTANT: Setting passes:true ends this session. Complete all steps BEFORE updating passes.
+IMPORTANT: Decide BEFORE coding. If you decide SKIP, do NOT modify any code files.
+IMPORTANT: Setting passes:true ends this session. Complete all steps first.
 
 Focus only on $NEXT_STORY."
 
