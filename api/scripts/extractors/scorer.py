@@ -253,11 +253,9 @@ class ExtractionScorer:
         else:
             col_consistency = 0.0
 
-        # Factor 3: Row fill consistency
-        row_fill_rates = []
-        for _, row in df.iterrows():
-            non_empty = sum(1 for cell in row if str(cell).strip())
-            row_fill_rates.append(non_empty / cols if cols > 0 else 0.0)
+        # Factor 3: Row fill consistency (vectorized for performance)
+        non_empty_per_row = (df.astype(str).apply(lambda col: col.str.strip() != '')).sum(axis=1)
+        row_fill_rates = (non_empty_per_row / cols).tolist() if cols > 0 else []
 
         if row_fill_rates:
             max_fill = max(row_fill_rates)
