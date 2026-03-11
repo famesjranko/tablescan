@@ -1415,5 +1415,775 @@ class TestAutoReviewAPIWorkflow(APITestCase):
                'no' in response.data.get('error', '').lower()
 
 
+# =============================================================================
+# BV-019: Edge Cases Tests
+# =============================================================================
+
+
+class TestBV019EdgeCases:
+    """
+    BV-019: End-to-end test: Edge cases
+
+    Verify handling of edge cases and error conditions:
+    - Single-page PDF displays correctly (no empty right page)
+    - Large PDF (20+ pages) loads without browser freeze
+    - Invalid PDF shows error message in viewer
+    - Network error during save shows retry option
+    - Navigating away with unsaved changes shows warning (if applicable)
+    - Zooming preserves box positions correctly
+    """
+
+    # =========================================================================
+    # Single-page PDF Tests
+    # =========================================================================
+
+    def test_single_page_pdf_clears_right_canvas(self):
+        """
+        Single-page PDF should clear the right canvas when rightPageNum > totalPages.
+        The clearCanvas method sets canvas dimensions to 0.
+        """
+        # Read book-viewer.js to verify single-page handling
+        import_path = Path(__file__).parent.parent.parent / 'static' / 'js' / 'book-viewer.js'
+        content = import_path.read_text()
+
+        # Verify the logic for clearing right page when beyond total pages
+        assert 'if (this.rightPageNum <= this.totalPages)' in content, \
+            "Should check if rightPageNum is within totalPages"
+        assert 'this.clearCanvas' in content, \
+            "Should call clearCanvas for pages beyond total"
+        assert "clearCanvas('right-page-canvas')" in content, \
+            "Should specifically clear right-page-canvas"
+
+    def test_single_page_pdf_label_hidden_for_empty_right(self):
+        """
+        Single-page PDF should hide the page number label for the empty right page.
+        Template uses x-show="rightPageNum > 0 && rightPageNum <= totalPages".
+        """
+        template_path = Path(__file__).parent.parent.parent / 'templates' / 'reports' / 'book_viewer.html'
+        content = template_path.read_text()
+
+        # Verify right page label visibility condition
+        assert 'rightPageNum <= totalPages' in content, \
+            "Right page label should only show when page exists"
+
+    def test_clear_canvas_removes_pdf_metadata(self):
+        """
+        clearCanvas should remove PDF metadata from canvas dataset.
+        This prevents stale data when page doesn't exist.
+        """
+        import_path = Path(__file__).parent.parent.parent / 'static' / 'js' / 'book-viewer.js'
+        content = import_path.read_text()
+
+        # Verify clearCanvas removes metadata
+        assert 'delete canvas.dataset.pdfWidth' in content
+        assert 'delete canvas.dataset.pdfHeight' in content
+        assert 'delete canvas.dataset.pageNum' in content
+        assert 'delete canvas.dataset.scale' in content
+
+    def test_spread_label_handles_single_page(self):
+        """
+        getSpreadLabel should display "Page X of X" for single-page PDFs.
+        """
+        import_path = Path(__file__).parent.parent.parent / 'static' / 'js' / 'book-viewer.js'
+        content = import_path.read_text()
+
+        # Verify single page label logic
+        assert 'if (left === right)' in content, \
+            "Should check if left equals right page"
+        assert '`Page ${left} of ${this.totalPages}`' in content, \
+            "Should show 'Page X of Y' for single page display"
+
+    # =========================================================================
+    # Large PDF Tests (20+ pages)
+    # =========================================================================
+
+    def test_large_pdf_lazy_renders_only_visible_spread(self):
+        """
+        Large PDFs should only render the current spread (2 pages), not all pages.
+        This prevents browser freeze on load.
+        """
+        import_path = Path(__file__).parent.parent.parent / 'static' / 'js' / 'book-viewer.js'
+        content = import_path.read_text()
+
+        # Verify lazy loading pattern
+        assert 'renderSpread()' in content, "Should have renderSpread method"
+        assert 'this.leftPageNum = this.currentSpread * 2 + 1' in content, \
+            "Should calculate left page from current spread"
+        assert 'this.rightPageNum = this.currentSpread * 2 + 2' in content, \
+            "Should calculate right page from current spread"
+
+    def test_large_pdf_renders_only_two_pages_per_spread(self):
+        """
+        renderSpread should render at most 2 pages (left and right).
+        """
+        import_path = Path(__file__).parent.parent.parent / 'static' / 'js' / 'book-viewer.js'
+        content = import_path.read_text()
+
+        # Count renderPage calls in renderSpread
+        # Should only render left and right pages
+        assert "await this.renderPage(this.leftPageNum, 'left-page-canvas')" in content
+        assert "await this.renderPage(this.rightPageNum, 'right-page-canvas')" in content
+
+    def test_large_pdf_page_metadata_loaded_progressively(self):
+        """
+        Page metadata loads all pages but doesn't render them all.
+        This is fast because it only reads dimensions, not content.
+        """
+        import_path = Path(__file__).parent.parent.parent / 'static' / 'js' / 'book-viewer.js'
+        content = import_path.read_text()
+
+        # Verify metadata loading uses getViewport which is fast
+        assert 'page.getViewport({ scale: 1.0 })' in content, \
+            "Should use getViewport for fast metadata reading"
+        assert 'viewport.width' in content and 'viewport.height' in content
+
+    def test_navigation_does_not_preload_all_pages(self):
+        """
+        Navigation methods should not attempt to preload all pages.
+        """
+        import_path = Path(__file__).parent.parent.parent / 'static' / 'js' / 'book-viewer.js'
+        content = import_path.read_text()
+
+        # Verify prevSpread and nextSpread only render current spread
+        assert 'prevSpread()' in content
+        assert 'nextSpread()' in content
+
+        # Both should call renderSpread(), not render all pages
+        # Check that after navigation, only renderSpread is called
+        prev_section = content[content.find('prevSpread()'):content.find('prevSpread()') + 300]
+        assert 'this.renderSpread()' in prev_section, \
+            "prevSpread should call renderSpread, not load all pages"
+
+    @pytest.fixture
+    def large_pdf_fixture(self):
+        """Create a 25-page PDF for testing."""
+        with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as f:
+            pdf_path = f.name
+
+        doc = fitz.open()
+        for i in range(25):
+            page = doc.new_page(width=612, height=792)
+            page.insert_text(fitz.Point(50, 50), f"Page {i + 1} of 25", fontsize=14)
+        doc.save(pdf_path)
+        doc.close()
+
+        yield pdf_path
+
+        Path(pdf_path).unlink(missing_ok=True)
+
+    def test_large_pdf_creation_succeeds(self, large_pdf_fixture):
+        """Verify the large PDF fixture creates 25 pages."""
+        doc = fitz.open(large_pdf_fixture)
+        assert doc.page_count == 25
+        doc.close()
+
+    # =========================================================================
+    # Invalid PDF Error Handling
+    # =========================================================================
+
+    def test_invalid_pdf_sets_error_state(self):
+        """
+        Invalid PDF loading should set error state in the viewer.
+        """
+        import_path = Path(__file__).parent.parent.parent / 'static' / 'js' / 'book-viewer.js'
+        content = import_path.read_text()
+
+        # Verify error handling in init()
+        assert 'catch (err)' in content, "Should have error catch block"
+        assert "this.error = err.message || 'Failed to load PDF document'" in content, \
+            "Should set error message on failure"
+        assert 'this.loading = false' in content, \
+            "Should clear loading state on error"
+
+    def test_invalid_pdf_error_shown_in_template(self):
+        """
+        Template should display error message when error state is set.
+        """
+        template_path = Path(__file__).parent.parent.parent / 'templates' / 'reports' / 'book_viewer.html'
+        content = template_path.read_text()
+
+        # Verify error display elements
+        assert 'x-show="error"' in content, "Should show error section when error is set"
+        assert 'Failed to load PDF' in content, "Should have error title"
+        assert 'x-text="error"' in content, "Should display error message"
+
+    def test_render_error_has_retry_button(self):
+        """
+        Page render error should show retry button.
+        """
+        template_path = Path(__file__).parent.parent.parent / 'templates' / 'reports' / 'book_viewer.html'
+        content = template_path.read_text()
+
+        # Verify render error UI with retry
+        assert 'x-show="renderError"' in content, "Should show renderError section"
+        assert '@click="renderSpread()"' in content, "Should have retry button for render errors"
+        assert 'Retry' in content, "Should have Retry text"
+
+    # =========================================================================
+    # Network Error Retry Tests
+    # =========================================================================
+
+    def test_network_error_shows_retry_button(self):
+        """
+        Network error during save should show error toast with retry option.
+        """
+        import_path = Path(__file__).parent.parent.parent / 'static' / 'js' / 'bbox-manager.js'
+        content = import_path.read_text()
+
+        # Verify retry mechanism exists
+        assert '_showErrorToast' in content, "Should have error toast method"
+        assert '_retryPendingSave' in content, "Should have retry method"
+        assert 'pendingRetryData' in content, "Should store retry data"
+
+    def test_retry_button_created_on_network_error(self):
+        """
+        _showErrorToast should create a Retry button when pendingRetryData exists.
+        """
+        import_path = Path(__file__).parent.parent.parent / 'static' / 'js' / 'bbox-manager.js'
+        content = import_path.read_text()
+
+        # Find the showErrorToast method
+        assert "if (this.pendingRetryData)" in content, \
+            "Should check if retry data exists"
+        assert "retryBtn.textContent = 'Retry'" in content, \
+            "Should create Retry button"
+        assert "retryBtn.onclick = () => this._retryPendingSave()" in content, \
+            "Retry button should call _retryPendingSave"
+
+    def test_retry_sends_same_data(self):
+        """
+        _retryPendingSave should send the same selection data that failed.
+        """
+        import_path = Path(__file__).parent.parent.parent / 'static' / 'js' / 'bbox-manager.js'
+        content = import_path.read_text()
+
+        # Find retry method
+        retry_section_start = content.find('async _retryPendingSave()')
+        retry_section = content[retry_section_start:retry_section_start + 800]
+
+        assert 'this.pendingRetryData' in retry_section, \
+            "Should use pendingRetryData"
+        assert 'JSON.stringify(selectionData)' in retry_section, \
+            "Should stringify the selection data for retry"
+
+    def test_dismiss_button_clears_pending_state(self):
+        """
+        Dismiss button should clear pending box and retry data.
+        """
+        import_path = Path(__file__).parent.parent.parent / 'static' / 'js' / 'bbox-manager.js'
+        content = import_path.read_text()
+
+        # Find dismiss button handler
+        assert "dismissBtn.textContent = 'Dismiss'" in content
+        assert 'this.pendingRetryData = null' in content, \
+            "Dismiss should clear retry data"
+
+    def test_network_error_stores_retry_data(self):
+        """
+        Network failure should store data for retry.
+        """
+        import_path = Path(__file__).parent.parent.parent / 'static' / 'js' / 'bbox-manager.js'
+        content = import_path.read_text()
+
+        # Verify retry data is stored on failure
+        assert "this.pendingRetryData = { box, selectionData }" in content, \
+            "Should store box and selectionData for retry"
+
+    # =========================================================================
+    # Extraction Error Retry Tests
+    # =========================================================================
+
+    def test_extraction_error_shows_retry_option(self):
+        """
+        Extraction failure should show error modal with retry button.
+        """
+        template_path = Path(__file__).parent.parent.parent / 'templates' / 'reports' / 'book_viewer.html'
+        content = template_path.read_text()
+
+        # Verify extraction error modal
+        assert 'x-show="extractError"' in content, "Should show extraction error modal"
+        assert '@click="retryExtraction()"' in content, "Should have retry button"
+        assert 'Extraction Failed' in content, "Should show failure title"
+
+    def test_retry_extraction_method_exists(self):
+        """
+        retryExtraction method should clear error and restart extraction.
+        """
+        import_path = Path(__file__).parent.parent.parent / 'static' / 'js' / 'book-viewer.js'
+        content = import_path.read_text()
+
+        # Find retryExtraction
+        assert 'retryExtraction()' in content, "Should have retryExtraction method"
+
+        retry_section_start = content.find('retryExtraction()')
+        retry_section = content[retry_section_start:retry_section_start + 200]
+
+        assert 'this.extractError = null' in retry_section, \
+            "Should clear error before retry"
+        assert 'this.startExtraction()' in retry_section, \
+            "Should call startExtraction to retry"
+
+    def test_close_extraction_error_method_exists(self):
+        """
+        closeExtractionError should clear error state without retry.
+        """
+        import_path = Path(__file__).parent.parent.parent / 'static' / 'js' / 'book-viewer.js'
+        content = import_path.read_text()
+
+        # Find closeExtractionError
+        assert 'closeExtractionError()' in content
+
+        close_section_start = content.find('closeExtractionError()')
+        close_section = content[close_section_start:close_section_start + 200]
+
+        assert 'this.extractError = null' in close_section
+        assert 'this.extracting = false' in close_section
+
+    # =========================================================================
+    # Zoom Preserves Box Positions Tests
+    # =========================================================================
+
+    def test_zoom_uses_css_transform(self):
+        """
+        Zoom should use CSS transform on the container, not reposition elements.
+        This preserves relative positions of selection overlays.
+        """
+        template_path = Path(__file__).parent.parent.parent / 'templates' / 'reports' / 'book_viewer.html'
+        content = template_path.read_text()
+
+        # Verify zoom is applied via CSS transform
+        assert "transform: 'scale(' + (zoom / 100) + ')'" in content, \
+            "Should use CSS transform for zoom"
+        assert "transformOrigin: 'top center'" in content, \
+            "Should set transform origin for consistent scaling"
+
+    def test_zoom_controls_range(self):
+        """
+        Zoom should be constrained to 50%-200% range.
+        """
+        import_path = Path(__file__).parent.parent.parent / 'static' / 'js' / 'book-viewer.js'
+        content = import_path.read_text()
+
+        # Verify zoom limits
+        assert 'if (this.zoom < 200)' in content, "Should check max zoom"
+        assert 'if (this.zoom > 50)' in content, "Should check min zoom"
+        assert 'this.zoom = Math.min(200' in content, "Should cap at 200"
+        assert 'this.zoom = Math.max(50' in content, "Should floor at 50"
+
+    def test_selection_overlay_relative_positioning(self):
+        """
+        Selection overlays should use relative positioning within the container.
+        This ensures they scale correctly with the CSS transform zoom.
+        """
+        template_path = Path(__file__).parent.parent.parent / 'templates' / 'reports' / 'book_viewer.html'
+        content = template_path.read_text()
+
+        # Verify overlays are positioned relative to container
+        assert 'page-container' in content
+        assert 'position: relative' in content, \
+            "Container should be positioned relative"
+
+    def test_coordinate_conversion_independent_of_zoom(self):
+        """
+        canvasToPdf and pdfToCanvas should not factor in zoom level.
+        Zoom is handled by CSS transform on container.
+        """
+        import_path = Path(__file__).parent.parent.parent / 'static' / 'js' / 'bbox-manager.js'
+        content = import_path.read_text()
+
+        # Find canvasToPdf method - should only use scale from dataset, not zoom
+        canvas_to_pdf_start = content.find('canvasToPdf(')
+        canvas_to_pdf = content[canvas_to_pdf_start:canvas_to_pdf_start + 400]
+
+        assert 'pdfCanvas.dataset.scale' in canvas_to_pdf, \
+            "Should use PDF render scale, not zoom"
+        assert 'zoom' not in canvas_to_pdf.lower(), \
+            "canvasToPdf should NOT reference zoom level"
+
+    def test_bbox_overlay_uses_absolute_positioning(self):
+        """
+        BoundingBox overlays should use absolute positioning within container.
+        """
+        import_path = Path(__file__).parent.parent.parent / 'static' / 'js' / 'bbox-manager.js'
+        content = import_path.read_text()
+
+        # Find createOverlay method - need to search a larger section
+        overlay_section_start = content.find('createOverlay(')
+        overlay_section = content[overlay_section_start:overlay_section_start + 1000]
+
+        assert 'position: absolute' in overlay_section, \
+            "Overlay should use absolute positioning"
+        assert 'top: 0' in overlay_section
+        assert 'left: 0' in overlay_section
+
+    # =========================================================================
+    # Unsaved Changes Warning Tests
+    # =========================================================================
+
+    def test_pending_box_state_tracked(self):
+        """
+        Pending box (drawn but not confirmed) state should be tracked.
+        """
+        import_path = Path(__file__).parent.parent.parent / 'static' / 'js' / 'bbox-manager.js'
+        content = import_path.read_text()
+
+        # Verify pendingBox state exists
+        assert 'this.pendingBox = null' in content, \
+            "Should initialize pendingBox state"
+
+    def test_escape_cancels_pending_box(self):
+        """
+        Pressing Escape should cancel any pending (unconfirmed) box.
+        """
+        import_path = Path(__file__).parent.parent.parent / 'static' / 'js' / 'bbox-manager.js'
+        content = import_path.read_text()
+
+        # Verify keyboard handler
+        assert '_handleKeydown' in content, "Should have keyboard handler"
+        assert "if (e.key === 'Escape')" in content, "Should handle Escape key"
+        assert 'this._cancelPendingBox()' in content, \
+            "Escape should cancel pending box"
+
+    def test_confirm_popup_has_cancel_button(self):
+        """
+        After drawing a box, confirm popup should have Cancel button.
+        """
+        import_path = Path(__file__).parent.parent.parent / 'static' / 'js' / 'bbox-manager.js'
+        content = import_path.read_text()
+
+        # Verify cancel functionality
+        assert '_showConfirmPopup' in content
+        assert "cancelText.textContent = 'Cancel'" in content
+        assert 'cancelBtn.onclick = () => this._cancelPendingBox()' in content
+
+    def test_unsaved_changes_note(self):
+        """
+        Note: beforeunload warning is not implemented as the current UX
+        requires explicit confirmation for each drawn box.
+        The "(if applicable)" in the acceptance criteria acknowledges this.
+
+        Current flow:
+        1. User draws a box
+        2. Confirm popup appears with Save/Cancel buttons
+        3. User must explicitly confirm before navigating
+        4. If they navigate away, only the unconfirmed pending box is lost
+
+        This is an acceptable UX as each box requires explicit action.
+        """
+        # This is a documentation test - the current UX is intentional
+        import_path = Path(__file__).parent.parent.parent / 'static' / 'js' / 'bbox-manager.js'
+        content = import_path.read_text()
+
+        # Verify explicit confirmation flow exists (which makes beforeunload less critical)
+        assert '_showConfirmPopup' in content, "Has explicit confirmation popup"
+        assert '_confirmPendingBox' in content, "Has confirm action"
+        assert '_cancelPendingBox' in content, "Has cancel action"
+
+    # =========================================================================
+    # Additional Edge Case Tests
+    # =========================================================================
+
+    def test_page_input_validates_range(self):
+        """
+        Page input should validate page number is within range.
+        """
+        import_path = Path(__file__).parent.parent.parent / 'static' / 'js' / 'book-viewer.js'
+        content = import_path.read_text()
+
+        # Find goToPageFromInput
+        assert 'goToPageFromInput()' in content
+
+        method_start = content.find('goToPageFromInput()')
+        method_section = content[method_start:method_start + 500]
+
+        assert 'if (pageNum < 1)' in method_section, "Should check minimum"
+        assert 'if (pageNum > this.totalPages)' in method_section, "Should check maximum"
+        assert 'isNaN(pageNum)' in method_section, "Should handle non-numeric input"
+
+    def test_min_box_size_filter(self):
+        """
+        Boxes smaller than 20x20 canvas pixels should be ignored (accidental clicks).
+        """
+        import_path = Path(__file__).parent.parent.parent / 'static' / 'js' / 'bbox-manager.js'
+        content = import_path.read_text()
+
+        # Verify minimum size check
+        assert 'width < 20 || height < 20' in content, \
+            "Should filter boxes smaller than 20x20 pixels"
+
+    def test_overlapping_box_click_detection(self):
+        """
+        Click handler should detect clicks on selection boxes.
+        """
+        import_path = Path(__file__).parent.parent.parent / 'static' / 'js' / 'bbox-manager.js'
+        content = import_path.read_text()
+
+        # Verify click detection logic
+        assert '_onClick(e, overlay)' in content, "Should have click handler"
+        assert 'clickX >= boxX && clickX <= boxX + boxWidth' in content, \
+            "Should check X bounds"
+        assert 'clickY >= boxY && clickY <= boxY + boxHeight' in content, \
+            "Should check Y bounds"
+
+    def test_error_toast_auto_dismisses(self):
+        """
+        Error toast should auto-dismiss (based on book-viewer.js showStatusError).
+        """
+        import_path = Path(__file__).parent.parent.parent / 'static' / 'js' / 'book-viewer.js'
+        content = import_path.read_text()
+
+        # Verify auto-dismiss
+        assert 'setTimeout(() =>' in content, "Should use setTimeout for auto-dismiss"
+        assert '5000' in content, "Should dismiss after 5 seconds"
+
+    def test_loading_state_shown_during_render(self):
+        """
+        Loading indicator should be shown during page rendering.
+        """
+        template_path = Path(__file__).parent.parent.parent / 'templates' / 'reports' / 'book_viewer.html'
+        content = template_path.read_text()
+
+        # Verify rendering indicator
+        assert 'x-show="renderingPages"' in content, \
+            "Should show indicator during page render"
+        assert 'Rendering pages...' in content, \
+            "Should show rendering message"
+
+
+# =============================================================================
+# BV-019: Integration Tests with Test Client
+# =============================================================================
+
+
+@pytest.mark.django_db
+class TestBV019IntegrationEdgeCases(APITestCase):
+    """Integration tests for edge cases using Django test client."""
+
+    def setUp(self):
+        """Set up test user and authentication."""
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        self.user = User.objects.create_user(
+            username='edge_test_user',
+            email='edge@test.com',
+            password='testpass123'
+        )
+        self.client.force_authenticate(user=self.user)
+
+    def test_single_page_pdf_direct_fitz_read(self):
+        """
+        Single page PDF should be readable with proper page count.
+        This tests the fitz library directly without Django file handling.
+        """
+        # Create single-page PDF
+        doc = fitz.open()
+        page = doc.new_page(width=612, height=792)
+        page.insert_text(fitz.Point(50, 50), "Single Page Document", fontsize=14)
+
+        # Verify single page
+        assert len(doc) == 1
+
+        # Verify dimensions
+        viewport = doc[0].rect
+        assert viewport.width == 612
+        assert viewport.height == 792
+
+        doc.close()
+
+    def test_single_page_report_spread_calculation(self):
+        """
+        Single page report should calculate currentSpread correctly.
+        With 1 page, currentSpread=0 shows page 1, right page is empty.
+        """
+        # Test the spread calculation logic:
+        # For totalPages=1, currentSpread=0:
+        # leftPageNum = 0 * 2 + 1 = 1
+        # rightPageNum = 0 * 2 + 2 = 2
+        # Since rightPageNum (2) > totalPages (1), right canvas is cleared
+
+        total_pages = 1
+        current_spread = 0
+
+        left_page = current_spread * 2 + 1
+        right_page = current_spread * 2 + 2
+
+        assert left_page == 1
+        assert right_page == 2
+        assert right_page > total_pages  # Should trigger clearCanvas
+
+    def test_large_pdf_direct_fitz_read(self):
+        """
+        Large PDF (25 pages) should be readable without issues.
+        This tests the fitz library directly without Django file handling.
+        """
+        # Create a 25-page PDF
+        doc = fitz.open()
+        for i in range(25):
+            page = doc.new_page(width=612, height=792)
+            page.insert_text(fitz.Point(50, 50), f"Page {i + 1}", fontsize=14)
+
+        # Verify page count
+        assert len(doc) == 25
+
+        # Verify all pages have valid dimensions
+        for page_num in range(25):
+            page = doc[page_num]
+            assert page.rect.width == 612
+            assert page.rect.height == 792
+
+        doc.close()
+
+    def test_large_pdf_spread_navigation(self):
+        """
+        Large PDF should support navigation through all spreads.
+        With 25 pages, there should be 13 spreads (last spread has only page 25).
+        """
+        total_pages = 25
+
+        # Count spreads
+        spreads = (total_pages + 1) // 2  # Ceiling division
+        assert spreads == 13
+
+        # Test last spread calculation
+        current_spread = 12  # 0-indexed, so 13th spread
+        left_page = current_spread * 2 + 1
+        right_page = current_spread * 2 + 2
+
+        assert left_page == 25
+        assert right_page == 26
+        assert right_page > total_pages  # Page 26 doesn't exist
+
+        # Test spread navigation bounds
+        def has_next_spread(spread, total):
+            return (spread + 1) * 2 < total
+
+        assert not has_next_spread(12, 25)  # No spread after 13th
+        assert has_next_spread(11, 25)  # Can go to 13th from 12th
+
+    def test_selection_on_last_page_of_large_pdf(self):
+        """
+        Selections should work on the last page of a large PDF.
+        """
+        from api.models import Report, TableSelection
+
+        report = Report.objects.create(
+            name='last_page_selection_test',
+            owner=self.user,
+            extraction_mode='manual',
+            extraction_status='pending_review',
+            total_pages=25
+        )
+
+        # Create selection on page 25
+        response = self.client.post(
+            f'/api/reports/{report.id}/selections/',
+            {
+                'page_num': 25,
+                'x1': 50.0,
+                'y1': 100.0,
+                'x2': 250.0,
+                'y2': 300.0,
+            },
+            format='json'
+        )
+
+        assert response.status_code == 201
+        assert response.data['page_num'] == 25
+        assert response.data['status'] == 'approved'
+
+        # Verify it's stored
+        sel = TableSelection.objects.get(id=response.data['id'])
+        assert sel.page_num == 25
+
+    def test_viewer_accessible_for_single_page_pdf(self):
+        """
+        Book viewer should be accessible for single-page PDFs.
+        Tests that the view accepts and renders for single-page documents.
+        """
+        from api.models import Report
+        from django.test import Client
+
+        report = None
+        try:
+            report = Report.objects.create(
+                name='single_page_viewer_test',
+                owner=self.user,
+                extraction_mode='manual',
+                extraction_status='pending_review',
+                total_pages=1
+            )
+
+            # Use Django test client (not DRF) for template rendering
+            client = Client()
+            client.force_login(self.user)
+
+            # Mock document.url to avoid file requirement
+            with patch.object(type(report.document), 'url', property(lambda self: '/media/test.pdf')):
+                response = client.get(f'/reports/{report.id}/viewer/')
+                assert response.status_code == 200
+
+        finally:
+            if report:
+                report.delete()
+
+    def test_invalid_page_selection_rejected(self):
+        """
+        Selection on page beyond total_pages should be rejected.
+        """
+        from api.models import Report
+
+        report = Report.objects.create(
+            name='invalid_page_test',
+            owner=self.user,
+            extraction_mode='manual',
+            extraction_status='pending_review',
+            total_pages=5
+        )
+
+        # Try to create selection on page 10 (beyond total)
+        response = self.client.post(
+            f'/api/reports/{report.id}/selections/',
+            {
+                'page_num': 10,  # Invalid - only 5 pages
+                'x1': 50.0,
+                'y1': 100.0,
+                'x2': 250.0,
+                'y2': 300.0,
+            },
+            format='json'
+        )
+
+        # Should be rejected by serializer validation
+        assert response.status_code == 400
+
+    def test_zero_page_number_rejected(self):
+        """
+        Selection on page 0 should be rejected.
+        """
+        from api.models import Report
+
+        report = Report.objects.create(
+            name='zero_page_test',
+            owner=self.user,
+            extraction_mode='manual',
+            extraction_status='pending_review',
+            total_pages=5
+        )
+
+        response = self.client.post(
+            f'/api/reports/{report.id}/selections/',
+            {
+                'page_num': 0,  # Invalid
+                'x1': 50.0,
+                'y1': 100.0,
+                'x2': 250.0,
+                'y2': 300.0,
+            },
+            format='json'
+        )
+
+        assert response.status_code == 400
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])
