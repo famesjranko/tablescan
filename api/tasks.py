@@ -3,13 +3,16 @@ tasks.py
     Celery tasks for async PDF table extraction
 """
 
+from collections import defaultdict
+
 from celery import shared_task
 from django.conf import settings
 from pathlib import Path, PurePath
 
 from api.scripts import table_extract
 from api.scripts.logging import Logging
-from api.scripts.YOLOV3.predict_table import detect_table_regions
+from api.scripts.YOLOV3.predict_table import detect_table_regions, save_extraction_results
+from api.scripts.extractors.multi_extractor import MultiExtractor
 from api.models import Report, TableSelection
 
 from timeit import default_timer as timer
@@ -218,6 +221,177 @@ def detect_tables_for_review(self, report_id):
 
     except Exception as e:
         log.output("ERROR", f"[Task {self.request.id}] Detection failed: {str(e)}")
+
+        # Update report status to failed
+        try:
+            report = Report.objects.get(id=report_id)
+            report.extraction_status = 'failed'
+            report.save(update_fields=['extraction_status'])
+        except Report.DoesNotExist:
+            pass
+
+        self.update_state(state='FAILURE', meta={
+            'status': f'Error: {str(e)}'
+        })
+        raise
+
+
+@shared_task(bind=True)
+def extract_from_selections(self, report_id):
+    """
+    Extract tables from approved TableSelection regions.
+
+    Gets all TableSelection records with status='approved' (includes both
+    YOLO-approved and manual selections), groups them by page, and uses
+    MultiExtractor to extract tables from those regions.
+
+    Args:
+        report_id: Database ID of the Report
+
+    Returns:
+        dict with status, report_id, tables_extracted
+    """
+    log = Logging()
+
+    self.update_state(state='PROGRESS', meta={
+        'current': 0,
+        'total': 100,
+        'status': 'Starting extraction from selections...'
+    })
+
+    start = timer()
+
+    try:
+        # Validate report exists
+        try:
+            report = Report.objects.get(id=report_id)
+        except Report.DoesNotExist:
+            log.output("WARNING", f"[Task {self.request.id}] Report {report_id} not found - stale task, skipping")
+            return {
+                'status': 'skipped',
+                'report_id': report_id,
+                'reason': 'Report no longer exists (stale task)'
+            }
+
+        # Update status to extracting
+        report.extraction_status = 'extracting'
+        report.save(update_fields=['extraction_status'])
+
+        log.output("INFO", f"[Task {self.request.id}] Starting extraction from selections for report {report_id}")
+
+        # Get approved selections
+        approved_selections = TableSelection.objects.filter(
+            report=report,
+            status='approved'
+        ).order_by('page_num', 'created_at')
+
+        if not approved_selections.exists():
+            log.output("WARNING", f"[Task {self.request.id}] No approved selections found for report {report_id}")
+            report.extraction_status = 'completed'
+            report.save(update_fields=['extraction_status'])
+            return {
+                'status': 'completed',
+                'report_id': report_id,
+                'tables_extracted': 0,
+                'message': 'No approved selections to extract'
+            }
+
+        # Group selections by page_num
+        selections_by_page = defaultdict(list)
+        for sel in approved_selections:
+            # Build table_areas as (x1, y1, x2, y2) tuples in PDF space
+            selections_by_page[sel.page_num].append((sel.x1, sel.y1, sel.x2, sel.y2))
+
+        log.output("INFO", f"[Task {self.request.id}] Found {len(approved_selections)} approved selections across {len(selections_by_page)} pages")
+
+        self.update_state(state='PROGRESS', meta={
+            'current': 10,
+            'total': 100,
+            'status': 'Loading PDF and preparing extraction...'
+        })
+
+        # Setup extraction directories
+        file_path = report.document.path
+        working_dir = Path(file_path).parent
+        extract_dir = {
+            "csv": working_dir / "csv",
+            "json": working_dir / "json",
+            "xlsx": working_dir / "xlsx",
+        }
+
+        # Create output directories
+        for dir_path in extract_dir.values():
+            dir_path.mkdir(parents=True, exist_ok=True)
+
+        # Initialize multi-extractor
+        multi_extractor = MultiExtractor()
+        total_tables_extracted = 0
+        pages_to_process = sorted(selections_by_page.keys())
+        total_pages = len(pages_to_process)
+
+        # Process each page with its table_areas
+        for i, page_num in enumerate(pages_to_process):
+            progress = 10 + int(80 * (i / total_pages))
+            self.update_state(state='PROGRESS', meta={
+                'current': progress,
+                'total': 100,
+                'status': f'Extracting tables from page {page_num}...'
+            })
+
+            table_areas = selections_by_page[page_num]
+            log.output("INFO", f"[Task {self.request.id}] Page {page_num}: extracting {len(table_areas)} table region(s)")
+
+            try:
+                # Extract best results for this page using the approved table areas
+                results = multi_extractor.extract_best(
+                    pdf_path=file_path,
+                    page_num=page_num,
+                    table_areas=table_areas
+                )
+
+                if results:
+                    # Save results to disk and database
+                    save_extraction_results(
+                        results=results,
+                        file_path=file_path,
+                        page_num=page_num,
+                        report_db=report,
+                        extract_dir=extract_dir,
+                        page_type='born_digital'  # Default for selection-based extraction
+                    )
+                    total_tables_extracted += len(results)
+                    log.output("INFO", f"[Task {self.request.id}] Page {page_num}: saved {len(results)} table(s)")
+                else:
+                    log.output("WARNING", f"[Task {self.request.id}] Page {page_num}: no tables extracted from {len(table_areas)} region(s)")
+
+            except Exception as page_error:
+                log.output("WARNING", f"[Task {self.request.id}] Page {page_num} extraction failed: {str(page_error)}")
+                # Continue with other pages
+
+        # Update status to completed
+        report.extraction_status = 'completed'
+        report.save(update_fields=['extraction_status'])
+
+        self.update_state(state='PROGRESS', meta={
+            'current': 100,
+            'total': 100,
+            'status': 'Extraction complete'
+        })
+
+        end = timer()
+        duration = format_timespan(end - start)
+        log.output("INFO", f"[Task {self.request.id}] Extraction completed in {duration}, {total_tables_extracted} tables extracted")
+
+        return {
+            'status': 'completed',
+            'report_id': report_id,
+            'tables_extracted': total_tables_extracted,
+            'pages_processed': len(pages_to_process),
+            'duration': duration
+        }
+
+    except Exception as e:
+        log.output("ERROR", f"[Task {self.request.id}] Extraction from selections failed: {str(e)}")
 
         # Update report status to failed
         try:

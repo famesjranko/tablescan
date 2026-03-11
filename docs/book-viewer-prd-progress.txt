@@ -1,0 +1,110 @@
+# Ralph Progress Log - book-viewer-prd
+Task File: /home/andy/automated-PDF-tabulated-data-extractor-api/docs/book-viewer-prd.json
+Started: Wed Mar 11 08:12:09 PM AEDT 2026
+
+## Codebase Patterns
+- Django 3.2 with DRF
+- Extraction pipeline in api/scripts/
+- Models in api/models.py (Report, Extracted)
+- Async via Celery (api/tasks.py)
+- Current extraction: YOLO -> Camelot
+
+---
+
+## BV-001: Add TableSelection model [COMPLETE]
+- Added TableSelection model to api/models.py
+- Fields: report (FK), page_num, x1/y1/x2/y2 (floats), confidence (nullable), source, status, created_at
+- Source choices: yolo, manual
+- Status choices: pending, approved, rejected, failed
+- Migration 0006_add_tableselection_model.py created and applied
+- Existing data verified intact (4 reports, 2 extracted records)
+- Commit: 981595d
+
+## BV-002: Add extraction_mode and extraction_status to Report model [COMPLETE]
+- Added extraction_mode field: choices (auto, manual, review), default='auto'
+- Added extraction_status field: choices (uploaded, detecting, pending_review, extracting, completed, failed), default='uploaded'
+- Migration 0007_add_extraction_mode_and_status.py created and applied
+- Existing reports migrated to extraction_mode='auto', extraction_status='completed'
+- Verified: 4 existing reports correctly updated
+- Commit: 88dddab
+
+## BV-003: Create TableSelectionSerializer [COMPLETE]
+- Added TableSelectionSerializer in api/serializers.py
+- Fields: id, report, page_num, x1, y1, x2, y2, confidence, source, status, created_at
+- report and created_at fields are read-only
+- Validates all coordinates are non-negative floats
+- Validates x1 < x2 and y1 < y2 (proper box orientation)
+- Validates page_num within report's total_pages (when report in context)
+- source defaults to 'manual' if not provided
+- status defaults to 'approved' for manual, 'pending' for yolo source
+- Tested: validation logic works correctly
+- Commit: 74779d1
+
+## BV-004: Add PDF metadata API endpoint [COMPLETE]
+- Added @action(detail=True) metadata endpoint to ReportViewSet
+- Endpoint: GET /api/reports/{id}/metadata/
+- Returns: {total_pages, pages: [{page_num, width, height, rotation}, ...]}
+- Uses PyMuPDF (fitz) to read page dimensions and rotation
+- Handles rotated pages correctly (swaps width/height for 90/270 rotation)
+- Protected by existing IsReportOwner permission (only report owner can access)
+- Returns 404 for invalid report ID (via get_object())
+- Added import for fitz and @action decorator
+- Verified: Django check passes, endpoint correctly registered
+
+## BV-005: Add TableSelection CRUD API endpoints [COMPLETE]
+- Added TableSelectionViewSet to api/views.py
+- Endpoints:
+  - GET /api/reports/{id}/selections/ - list selections for report
+  - GET ?page_num= - filter by page number
+  - GET ?status= - filter by status (comma-separated, e.g., ?status=pending,approved)
+  - POST /api/reports/{id}/selections/ - create selection (sets report from URL)
+  - PATCH /api/reports/{id}/selections/{sel_id}/ - update status field only
+  - DELETE /api/reports/{id}/selections/{sel_id}/ - remove selection
+- All endpoints require authentication
+- Report ownership enforced (returns 404 if not owned)
+- Selection must belong to report (returns 404 if not)
+- PATCH validates status value against STATUS_CHOICES
+- PATCH rejects attempts to modify non-status fields with 400
+- Added nested URL patterns in api/urls.py
+- Tested: All CRUD operations verified working
+- Commit: 76429b8
+
+## BV-006: Create standalone YOLO detection function [COMPLETE]
+- Added detect_table_regions(file_path, page_number) to api/scripts/YOLOV3/predict_table.py
+- Returns list of dicts: [{x1, y1, x2, y2, confidence}, ...]
+- Coordinates in PDF space (bottom-left origin) using bboxes_pdf() Y-flip
+- Reuses existing YOLO inference: detectTable, outpout_yolo, bboxes_pdf, norm_bbox
+- Does NOT call Camelot or save to database
+- Cleans up temporary image files (Path.unlink)
+- Added unit tests in api/tests/test_predict_table.py
+- Tests skip gracefully when poppler not installed
+- Commit: c86e94e
+
+## BV-007: Add detect-for-review Celery task [COMPLETE]
+- Added detect_tables_for_review(report_id) Celery task to api/tasks.py
+- Updates Report.extraction_status to 'detecting' at start
+- Iterates through report page range (start_page to end_page)
+- Calls detect_table_regions() for each page
+- Saves each detected region as TableSelection(source='yolo', status='pending')
+- Updates Report.extraction_status to 'pending_review' on success
+- Updates Report.extraction_status to 'failed' on error
+- Returns {status, report_id, selections_count, redirect_url} for frontend
+- Uses existing TaskStatusView pattern at /task-status/<task_id>/
+- Progress updates via self.update_state() for SSE streaming
+- Handles page-level errors gracefully (continues with other pages)
+- Commit: 01fae46
+
+## BV-008: Add extract-from-selections Celery task and endpoint [COMPLETE]
+- Added extract_from_selections(report_id) Celery task to api/tasks.py
+- Gets TableSelection records with status='approved' (YOLO-approved + manual)
+- Groups selections by page_num
+- Builds table_areas as [(x1, y1, x2, y2), ...] for each page (PDF space coordinates)
+- Calls MultiExtractor.extract_best(pdf_path, page_num, table_areas=[...])
+- Saves results using save_extraction_results() to Extracted model
+- Creates csv, json, xlsx output files
+- Updates Report.extraction_status: 'extracting' -> 'completed'
+- Added POST /api/reports/{id}/extract-selections/ endpoint
+- Endpoint triggers task and returns {task_id, status, approved_selections}
+- Returns 400 if no approved selections found
+- Uses existing TaskStatusView at /task-status/<task_id>/ for polling
+

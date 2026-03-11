@@ -96,6 +96,35 @@ class ReportViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         return Report.objects.filter(owner=self.request.user)
 
+    @action(detail=True, methods=['post'], url_path='extract-selections')
+    def extract_selections(self, request, pk=None):
+        """
+        Trigger extraction from approved TableSelection regions.
+
+        POST /api/reports/{id}/extract-selections/
+        Returns {task_id, status} for polling via /task-status/<task_id>/
+        """
+        from api.tasks import extract_from_selections
+
+        report = self.get_object()
+
+        # Check if there are any approved selections
+        approved_count = report.selections.filter(status='approved').count()
+        if approved_count == 0:
+            return Response(
+                {'error': 'No approved selections to extract'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Queue extraction task
+        task = extract_from_selections.delay(report.id)
+
+        return Response({
+            'task_id': task.id,
+            'status': 'queued',
+            'approved_selections': approved_count
+        })
+
     @action(detail=True, methods=['get'])
     def metadata(self, request, pk=None):
         """
