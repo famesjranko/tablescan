@@ -42,6 +42,7 @@ import json
 import filecmp
 import multiprocessing as mp
 
+from typing import Any, Callable, Dict, List, Optional
 from pathlib import Path, PurePath
 from tabulate import tabulate
 from PyPDF2 import PdfReader
@@ -275,13 +276,13 @@ def process_page_with_routing(
     file_path: str,
     page_num: int,
     output_type: str,
-    report_db,
-    extract_dir: dict,
+    report_db: "Report",
+    extract_dir: Dict[str, Any],
     flavor: str,
     row_tol: int,
     strip_text: str,
     merge_headers: bool
-) -> list:
+) -> List[Dict[str, Any]]:
     """
     Process a single page with routing based on page classification.
 
@@ -453,7 +454,7 @@ def pdf_stats(
     start_page: int,
     end_page: int,
     output_types: dict,
-    tables_found=None,
+    tables_found: Optional[int] = None,
 ) -> str:
     """
     print basic document processing information for logging
@@ -542,7 +543,7 @@ def end_of_range(start_page: int, end_page: int, total_pages: int) -> int:
         return end_page
 
 
-def start_of_range(start_page: int, end_at: int, start_at=1) -> int:
+def start_of_range(start_page: int, end_at: int, start_at: int = 1) -> int:
     """
     checks and validates user requested extraction start page
 
@@ -571,15 +572,15 @@ def start_of_range(start_page: int, end_at: int, start_at=1) -> int:
         return start_at
 
 
-def collect_result(filename: str, table: dict, tables_list) -> None:
+def collect_result(filename: str, table: Dict[str, Any], tables_list: List[Dict[str, Any]]) -> None:
     """
     append dictionary of table data to tables list
     returns None
 
     Args:
         filename (str): [table output file name]
-        table (dict):   [json table structure]
-        tables_list     ([type]): [list to append to]
+        table (Dict[str, Any]):   [json table structure]
+        tables_list (List[Dict[str, Any]]): [list to append to]
 
     Returns: None
     """
@@ -591,13 +592,13 @@ def collect_result(filename: str, table: dict, tables_list) -> None:
     return None
 
 
-def collect_parsing_report(report: list) -> None:
+def collect_parsing_report(report: List[Dict[str, Any]]) -> None:
     """
     collector function for grabbing multi-processing outputs,
     appends outputs to report_list
 
     Args:
-        report (list): camelot parsing report stats
+        report (List[Dict[str, Any]]): camelot parsing report stats
 
     Returns: None
     """
@@ -642,7 +643,7 @@ def process_extracted_file(
 def extract(file_path: str, start_page: int, end_page: int,
             flavor: str = 'auto', row_tol: int = 2, strip_text: str = '\n',
             merge_headers: bool = True, report_id: int = None,
-            progress_callback: callable = None) -> dict:
+            progress_callback: Optional[Callable[[int, str], None]] = None) -> Dict[str, Any]:
     """
     extract function links django API request /upload to YoloV3 extraction engine.
     takes a pdf filepath, desired extraction output types, start page, and end page.

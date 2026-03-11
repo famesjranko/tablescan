@@ -230,3 +230,138 @@ row_fill_rates = (non_empty_per_row / cols).tolist() if cols > 0 else []
 
 ---
 
+## CR-006: Clean up unused parameters in extract_tables_vision
+**Decision: FIX (Remove unused parameters)**
+**Date:** 2026-03-11
+
+### Analysis
+The code review identified that `extract_tables_vision()` accepts `flavor` and `row_tol` parameters but never uses them. The docstring stated they were "kept for API compatibility."
+
+### Findings
+
+**Review Questions Answered:**
+
+1. **Are these parameters for API consistency with extract_tables_direct?**
+   - Partially, but the consistency argument is weak because `extract_tables_vision_readonly` (the actually-used function) already doesn't have them.
+
+2. **Could future vision extractors use these parameters?**
+   - No. Vision extractors use img2table which has different configuration (implicit_rows, borderless_tables, min_confidence). `flavor` and `row_tol` are Camelot-specific concepts.
+
+3. **Would removing them break any callers?**
+   - No. Searched entire codebase - no callers pass these parameters. The extraction path uses `extract_tables_vision_readonly` which already doesn't have them.
+
+4. **Is the current comment sufficient documentation?**
+   - The "API compatibility" claim is misleading since `extract_tables_vision_readonly` has a different signature already.
+
+### Resolution
+Removed the unused `flavor` and `row_tol` parameters from `extract_tables_vision()`.
+Added explanatory note in docstring:
+```
+Note: Unlike extract_tables_direct, this function does not accept flavor
+or row_tol parameters because img2table uses different configuration
+(implicit_rows, borderless_tables, min_confidence).
+```
+
+### Verification
+- All 17 vision-related routing tests pass
+- All 17 phase3 vision tests pass
+- `test_extract_tables_vision_signature_compatible` passes
+
+---
+
+## CR-007: Document magic numbers in scorer.py
+**Decision: FIX (Selective documentation)**
+**Date:** 2026-03-11
+
+### Analysis
+The code review identified several unexplained constants in scorer.py:
+- Weight tolerance 0.01 (line 68)
+- Text capture weights 0.7/0.3 and multiplier *2 (line 215)
+- Regularity weights 0.2/0.4/0.4 (lines 268-272)
+- Header detection thresholds and weights (lines 365, 380, 385)
+
+### Evaluation
+
+**Categorized constants:**
+
+| Constant | Self-evident? | Rationale |
+|----------|---------------|-----------|
+| 0.01 tolerance | Yes | Standard float comparison precision |
+| 2x2 minimum | Yes | Already commented "Minimum viable structure" |
+| 0.7 neutral score | Yes | Already commented "table may be text-only" |
+| 0.7/0.3 coverage weights | No | Empirically tuned - cell_fill more reliable |
+| *2 text_capture multiplier | No | Compensates for typically low overlap |
+| 0.2/0.4/0.4 regularity | No | Binary vs continuous metric weighting |
+| *2 numeric_diff multiplier | No | Scales 0-0.5 range to 0-1 |
+| 1.5 length ratio | No | Defines "similar length" threshold |
+| 0.6/0.4 header weights | No | Numeric is more reliable than length |
+
+### Decision
+Document only the non-obvious constants with concise inline comments. Skip constants that are self-evident or already documented.
+
+**Extracting to named constants was considered and rejected because:**
+1. Each value is used exactly once
+2. Values are context-dependent (not reusable)
+3. Inline comments provide rationale without cluttering module-level scope
+
+### Resolution
+Added concise comments explaining:
+- Coverage: Cell fill weighted higher as more reliable; multiplier compensates for low overlap
+- Regularity: Structure is binary (less granular) vs continuous consistency metrics
+- Header numeric: Scales typical 0-0.5 difference to 0-1 score
+- Header length: Ratio <1.5 considered normal for labels
+- Header combination: Numeric is more reliable indicator than length
+
+### Verification
+- All 28 scorer tests pass
+- Comments are concise and explain "why" not "what"
+
+---
+
+## CR-008: Add missing type annotations
+**Decision: FIX (Improve consistency with typed codebase)**
+**Date:** 2026-03-11
+
+### Analysis
+The code review identified incomplete type annotations in `table_extract.py`:
+- `collect_result()` at line 575
+- `collect_parsing_report()` at line 595
+- Other untyped parameters throughout the file
+
+### Findings
+
+**Codebase typing assessment:**
+1. **Newer modules ARE typed** - `api/scripts/extractors/*.py` use comprehensive types (`Dict[str, Any]`, `List[ExtractionResult]`, `Optional[Callable]`)
+2. **Older code has partial typing** - `table_extract.py` used basic `list`, `dict` instead of generics
+3. **Python 3.9+ syntax available** - codebase uses modern PEP 585 syntax (`list[T]`)
+
+**Functions examined:**
+- `collect_result(filename: str, table: dict, tables_list: list)` - had basic types
+- `collect_parsing_report(report: list)` - had basic type
+- `start_of_range(..., start_at=1)` - missing type on default param
+- `process_page_with_routing(..., report_db, extract_dir: dict)` - missing/vague types
+- `extract(..., progress_callback: callable)` - lowercase callable (not proper typing)
+- `pdf_stats(..., tables_found=None)` - missing type
+
+### Rationale
+Adding specific type annotations is CONSISTENT with this codebase because:
+1. The extractor modules (Phase 2 additions) already use `Dict[str, Any]`, `List[...]`, etc.
+2. This improves IDE support and mypy compatibility
+3. Changes are minimal and focused
+
+### Resolution
+Updated type annotations in `table_extract.py`:
+- Added imports: `from typing import Any, Callable, Dict, List, Optional`
+- `collect_result(filename: str, table: Dict[str, Any], tables_list: List[Dict[str, Any]]) -> None`
+- `collect_parsing_report(report: List[Dict[str, Any]]) -> None`
+- `start_of_range(start_page: int, end_at: int, start_at: int = 1) -> int`
+- `process_page_with_routing(..., report_db: "Report", extract_dir: Dict[str, Any], ...) -> List[Dict[str, Any]]`
+- `extract(..., progress_callback: Optional[Callable[[int, str], None]] = None) -> Dict[str, Any]`
+- `pdf_stats(..., tables_found: Optional[int] = None) -> str`
+
+### Verification
+- All 65 extractor tests pass
+- Syntax validation passes
+
+---
+
