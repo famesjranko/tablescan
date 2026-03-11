@@ -16,6 +16,7 @@ Referenced by:
 """
 
 from rest_framework import serializers
+from rest_framework.exceptions import ValidationError
 from .models import *
 
 
@@ -112,3 +113,84 @@ class ReportSerializer(serializers.ModelSerializer):
             "extracted",
             "owner",
         )
+
+
+class TableSelectionSerializer(serializers.ModelSerializer):
+    """
+    TableSelection Model Serializer for CRUD operations
+    """
+
+    report = serializers.PrimaryKeyRelatedField(read_only=True)
+    created_at = serializers.DateTimeField(read_only=True)
+
+    class Meta:
+        model = TableSelection
+        fields = (
+            "id",
+            "report",
+            "page_num",
+            "x1",
+            "y1",
+            "x2",
+            "y2",
+            "confidence",
+            "source",
+            "status",
+            "created_at",
+        )
+
+    def validate_x1(self, value):
+        if value < 0:
+            raise ValidationError("x1 must be non-negative.")
+        return value
+
+    def validate_y1(self, value):
+        if value < 0:
+            raise ValidationError("y1 must be non-negative.")
+        return value
+
+    def validate_x2(self, value):
+        if value < 0:
+            raise ValidationError("x2 must be non-negative.")
+        return value
+
+    def validate_y2(self, value):
+        if value < 0:
+            raise ValidationError("y2 must be non-negative.")
+        return value
+
+    def validate(self, attrs):
+        # Validate box orientation: x1 < x2 and y1 < y2
+        x1 = attrs.get("x1")
+        y1 = attrs.get("y1")
+        x2 = attrs.get("x2")
+        y2 = attrs.get("y2")
+
+        if x1 is not None and x2 is not None and x1 >= x2:
+            raise ValidationError({"x2": "x2 must be greater than x1."})
+        if y1 is not None and y2 is not None and y1 >= y2:
+            raise ValidationError({"y2": "y2 must be greater than y1."})
+
+        # Validate page_num is within report's total_pages
+        page_num = attrs.get("page_num")
+        report = self.context.get("report")
+        if report and page_num is not None:
+            if report.total_pages is not None and page_num > report.total_pages:
+                raise ValidationError({
+                    "page_num": f"page_num must not exceed report's total_pages ({report.total_pages})."
+                })
+            if page_num < 1:
+                raise ValidationError({"page_num": "page_num must be at least 1."})
+
+        # Set default source to 'manual' if not provided
+        if "source" not in attrs or attrs.get("source") is None:
+            attrs["source"] = "manual"
+
+        # Set default status based on source
+        if "status" not in attrs or attrs.get("status") is None:
+            if attrs.get("source") == "manual":
+                attrs["status"] = "approved"
+            else:
+                attrs["status"] = "pending"
+
+        return attrs
