@@ -22,6 +22,7 @@ from rest_framework.views import APIView
 from rest_framework import viewsets
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.decorators import action
 
 from django_filters.rest_framework import DjangoFilterBackend
 
@@ -36,6 +37,7 @@ from .serializers import *
 from .models import Extracted, Report
 from api.scripts import table_extract
 from api.scripts.logging import Logging
+import fitz  # PyMuPDF
 
 from pathlib import Path, PurePath
 import datetime as date
@@ -82,6 +84,7 @@ class ReportViewSet(viewsets.ModelViewSet):
     Update part of report:          PATCH   api/reports/{id}/
     Remove report by id:            DELETE  api/reports/{id}/
     Remove report by name:          DELETE  api/reports/?name=
+    Get PDF metadata:               GET     api/reports/{id}/metadata/
     """
 
     queryset = Report.objects.all()
@@ -92,6 +95,56 @@ class ReportViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         return Report.objects.filter(owner=self.request.user)
+
+    @action(detail=True, methods=['get'])
+    def metadata(self, request, pk=None):
+        """
+        Get PDF page count and dimensions for viewer initialization.
+        Returns {total_pages, pages: [{page_num, width, height, rotation}, ...]}
+        """
+        report = self.get_object()
+
+        if not report.document:
+            return Response(
+                {'error': 'No document attached to this report'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            doc = fitz.open(report.document.path)
+        except Exception as e:
+            return Response(
+                {'error': f'Failed to open PDF: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+        try:
+            pages = []
+            for page_num in range(len(doc)):
+                page = doc[page_num]
+                rotation = page.rotation
+
+                # Get dimensions from media box
+                width = page.rect.width
+                height = page.rect.height
+
+                # Swap width/height for 90 or 270 degree rotation
+                if rotation in (90, 270):
+                    width, height = height, width
+
+                pages.append({
+                    'page_num': page_num + 1,  # 1-indexed for user-facing API
+                    'width': round(width, 2),
+                    'height': round(height, 2),
+                    'rotation': rotation
+                })
+
+            return Response({
+                'total_pages': len(doc),
+                'pages': pages
+            })
+        finally:
+            doc.close()
 
 
 class ExtractedViewSet(viewsets.ModelViewSet):
