@@ -56,7 +56,7 @@ from api.scripts.table_detector import detect_table_type_from_array
 from api.scripts.header_processor import process_table_headers, strip_empty_rows_and_cols
 from api.scripts.extractors import MultiExtractor, VisionExtractor, ExtractionScorer
 from api.scripts.extractors.base import ExtractionResult
-from api.scripts.xlsx_exporter import export_to_xlsx
+from api.scripts.xlsx_exporter import export_to_xlsx, build_xlsx_structure_from_extraction
 from typing import Optional, List
 import json as json_lib
 
@@ -65,10 +65,8 @@ def build_structure_json(df, metadata: dict = None) -> dict:
     """
     Build rich structure_json from a DataFrame with cell-level data.
 
-    Creates a structured JSON representation of the table that includes:
-    - Cell values organized by row and column
-    - Cell spans if detected (from metadata)
-    - Row and column counts
+    This is a convenience wrapper around build_xlsx_structure_from_extraction
+    for backward compatibility with existing callers.
 
     Args:
         df: pandas DataFrame containing the table data
@@ -77,46 +75,7 @@ def build_structure_json(df, metadata: dict = None) -> dict:
     Returns:
         dict with structure_json format containing cells array and dimensions
     """
-    if df is None or df.empty:
-        return None
-
-    rows, cols = df.shape
-    cells = []
-
-    for row_idx in range(rows):
-        for col_idx in range(cols):
-            cell_value = df.iloc[row_idx, col_idx]
-            cell_data = {
-                "row": row_idx,
-                "col": col_idx,
-                "value": str(cell_value) if cell_value is not None else "",
-            }
-
-            # Check metadata for span information
-            # Camelot and other extractors may provide cell span data
-            if metadata:
-                cells_meta = metadata.get("cells", [])
-                for cm in cells_meta:
-                    if cm.get("row") == row_idx and cm.get("col") == col_idx:
-                        if cm.get("rowspan", 1) > 1:
-                            cell_data["rowspan"] = cm["rowspan"]
-                        if cm.get("colspan", 1) > 1:
-                            cell_data["colspan"] = cm["colspan"]
-                        break
-
-            cells.append(cell_data)
-
-    structure = {
-        "rows": rows,
-        "cols": cols,
-        "cells": cells,
-    }
-
-    # Add header information if available
-    if metadata and metadata.get("header_rows") is not None:
-        structure["header_rows"] = metadata["header_rows"]
-
-    return structure
+    return build_xlsx_structure_from_extraction(df, metadata)
 
 
 # %%
@@ -919,12 +878,3 @@ def extract_tables_vision(file_path: str, page_number: int, output_type: str,
     log.output('INFO', f'[vision-extractor] Page {page_number}: exported {len(results)} table(s)')
 
     return report
-
-
-# %%
-if __name__ == "__main__":
-
-    # for module import and calling
-    detect_tables()
-
-# %%
