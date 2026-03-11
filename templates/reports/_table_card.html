@@ -60,13 +60,14 @@
             <div class="overflow-x-auto">
                 <table class="min-w-full divide-y divide-gray-200">
                     <thead class="bg-gray-50">
-                        <!-- Hierarchical headers with colspan when header_spans available -->
+                        <!-- Hierarchical headers with colspan/rowspan when header_spans available -->
                         <template x-if="previewData.header_spans && previewData.header_spans.length > 0">
                             <template x-for="rowIdx in [...new Set(previewData.header_spans.map(s => s.row))].sort()" :key="'row-' + rowIdx">
                                 <tr>
                                     <template x-for="span in previewData.header_spans.filter(s => s.row === rowIdx)" :key="'span-' + span.row + '-' + span.col">
-                                        <th :colspan="span.colspan"
-                                            class="px-4 py-2 text-center text-xs font-medium text-gray-500 uppercase tracking-wider border-b border-gray-200"
+                                        <th :colspan="span.colspan > 1 ? span.colspan : null"
+                                            :rowspan="span.rowspan > 1 ? span.rowspan : null"
+                                            class="px-4 py-2 text-center text-xs font-medium text-gray-500 uppercase tracking-wider border border-gray-200"
                                             x-text="span.value"></th>
                                     </template>
                                 </tr>

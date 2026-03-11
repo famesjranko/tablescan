@@ -120,12 +120,12 @@ def _apply_header_spans(
     """
     Apply merged cells for hierarchical headers based on header_spans.
 
-    This creates merged cells for parent headers that span multiple columns,
-    preserving the visual hierarchy from the original PDF.
+    This creates merged cells for headers that span multiple columns (colspan)
+    or multiple rows (rowspan), preserving the visual hierarchy from the PDF.
 
     Args:
         ws: openpyxl worksheet
-        header_spans: List of span dicts with row, col, value, colspan, children
+        header_spans: List of span dicts with row, col, value, colspan, rowspan
         header_font: Font style for headers
         header_fill: Fill style for headers
         header_alignment: Alignment for headers
@@ -139,17 +139,20 @@ def _apply_header_spans(
 
     for span in header_spans:
         colspan = span.get("colspan", 1)
-        if colspan > 1:
+        rowspan = span.get("rowspan", 1)
+
+        if colspan > 1 or rowspan > 1:
             # Convert 0-indexed to 1-indexed for openpyxl
             start_row = span["row"] + 1
             start_col = span["col"] + 1
+            end_row = start_row + rowspan - 1
             end_col = start_col + colspan - 1
 
-            # Merge cells horizontally
+            # Merge cells
             ws.merge_cells(
                 start_row=start_row,
                 start_column=start_col,
-                end_row=start_row,
+                end_row=end_row,
                 end_column=end_col
             )
 

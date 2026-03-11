@@ -89,23 +89,24 @@ def detect_header_rows(df: pd.DataFrame, max_header_rows: int = 4) -> int:
 
 def detect_header_spans(df: pd.DataFrame, num_header_rows: int) -> list:
     """
-    Detect column spans from empty cell patterns in multi-row headers.
+    Detect column and row spans from empty cell patterns in multi-row headers.
 
-    A cell is considered to span multiple columns if:
-    - It has a non-empty value
-    - The cells to its right in the same row are empty
-    - The row below has content in those empty positions
+    Colspan: A cell spans multiple columns if cells to its right are empty
+    and the row below has content in those positions.
+
+    Rowspan: A cell spans multiple rows if cells below it are empty.
 
     Args:
         df: The DataFrame to analyze
         num_header_rows: Number of header rows to examine
 
     Returns:
-        List of dicts with keys: row, col, value, colspan, children
+        List of dicts with keys: row, col, value, colspan, rowspan, children
         - row: 0-indexed row number within header
         - col: 0-indexed column number
         - value: The cell's text content
-        - colspan: Number of columns this cell spans
+        - colspan: Number of columns this cell spans (default 1)
+        - rowspan: Number of rows this cell spans (default 1)
         - children: List of child header values (from row below) if colspan > 1
     """
     if df.empty or num_header_rows <= 0:
@@ -114,13 +115,21 @@ def detect_header_spans(df: pd.DataFrame, num_header_rows: int) -> list:
     header_rows = df.iloc[:num_header_rows]
     spans = []
 
+    # Track which cells are "covered" by a rowspan from above
+    covered = set()  # (row, col) pairs that are covered by rowspan
+
     for row_idx in range(num_header_rows):
         col_idx = 0
         while col_idx < len(df.columns):
+            # Skip cells covered by rowspan from above
+            if (row_idx, col_idx) in covered:
+                col_idx += 1
+                continue
+
             cell_value = str(header_rows.iloc[row_idx, col_idx]).strip()
 
             if cell_value and cell_value.lower() != 'nan':
-                # Count consecutive empty cells to the right
+                # Count consecutive empty cells to the right (colspan)
                 colspan = 1
                 check_col = col_idx + 1
 
@@ -136,6 +145,17 @@ def detect_header_spans(df: pd.DataFrame, num_header_rows: int) -> list:
                                 continue
                     break
 
+                # Count consecutive empty cells below (rowspan)
+                rowspan = 1
+                for check_row in range(row_idx + 1, num_header_rows):
+                    below_val = str(header_rows.iloc[check_row, col_idx]).strip()
+                    if not below_val or below_val.lower() == 'nan':
+                        rowspan += 1
+                        # Mark this cell as covered
+                        covered.add((check_row, col_idx))
+                    else:
+                        break
+
                 # Collect children (values in row below this span)
                 children = []
                 if row_idx + 1 < num_header_rows and colspan > 1:
@@ -149,6 +169,7 @@ def detect_header_spans(df: pd.DataFrame, num_header_rows: int) -> list:
                     'col': col_idx,
                     'value': cell_value,
                     'colspan': colspan,
+                    'rowspan': rowspan,
                     'children': children if children else None
                 })
                 col_idx += colspan
