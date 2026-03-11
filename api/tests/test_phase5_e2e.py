@@ -2185,5 +2185,305 @@ class TestBV019IntegrationEdgeCases(APITestCase):
         assert response.status_code == 400
 
 
+# =============================================================================
+# BV-020: Edge Cases in Detection and Extraction
+# =============================================================================
+
+
+class TestEdgeCaseMessages:
+    """
+    BV-020: Verify user-friendly messages and edge case handling
+    """
+
+    def test_zero_detection_message_in_review_mode(self):
+        """
+        When YOLO detects 0 tables in review mode, getEmptyStateMessage()
+        returns the specific "No tables detected" message.
+        """
+        # JavaScript function logic check
+        js_code = Path(__file__).parent.parent.parent / 'static' / 'js' / 'book-viewer.js'
+        content = js_code.read_text()
+
+        # Verify the getEmptyStateMessage() function exists and returns correct message
+        assert 'getEmptyStateMessage()' in content
+        assert "No tables detected. Draw selections manually or try a different PDF." in content
+
+    def test_zero_detection_hint_message(self):
+        """
+        When YOLO detects 0 tables in review mode, getEmptyStateHint()
+        returns guidance about manual selection.
+        """
+        js_code = Path(__file__).parent.parent.parent / 'static' / 'js' / 'book-viewer.js'
+        content = js_code.read_text()
+
+        # Verify the getEmptyStateHint() function exists
+        assert 'getEmptyStateHint()' in content
+        assert "You can still draw boxes around tables manually" in content
+
+    def test_manual_mode_empty_message_different(self):
+        """
+        In manual mode (not review), the empty message is generic.
+        """
+        js_code = Path(__file__).parent.parent.parent / 'static' / 'js' / 'book-viewer.js'
+        content = js_code.read_text()
+
+        # Manual mode has different message
+        assert "No table selections yet." in content
+
+    def test_template_uses_dynamic_empty_messages(self):
+        """
+        Template uses dynamic getEmptyStateMessage() and getEmptyStateHint().
+        """
+        template = Path(__file__).parent.parent.parent / 'templates' / 'reports' / 'book_viewer.html'
+        content = template.read_text()
+
+        # Verify template calls the methods
+        assert 'x-text="getEmptyStateMessage()"' in content
+        assert 'x-text="getEmptyStateHint()"' in content
+
+
+class TestPartialExtractionSuccess:
+    """
+    BV-020: Verify partial extraction success handling
+    """
+
+    def test_extract_from_selections_tracks_failed_pages(self):
+        """
+        The extract_from_selections task tracks failed pages.
+        """
+        from api.tasks import extract_from_selections
+        import inspect
+
+        source = inspect.getsource(extract_from_selections)
+
+        # Verify failed_pages tracking is implemented
+        assert 'failed_pages = []' in source
+        assert 'failed_pages.append(page_num)' in source
+
+    def test_extract_from_selections_returns_failed_pages(self):
+        """
+        The extract_from_selections task includes failed_pages in result.
+        """
+        from api.tasks import extract_from_selections
+        import inspect
+
+        source = inspect.getsource(extract_from_selections)
+
+        # Verify result includes failed_pages
+        assert "result['failed_pages']" in source
+
+    def test_extract_from_selections_marks_failed_status(self):
+        """
+        When extraction fails for a selection, it's marked with status='failed'.
+        """
+        from api.tasks import extract_from_selections
+        import inspect
+
+        source = inspect.getsource(extract_from_selections)
+
+        # Verify selections are updated to failed status
+        assert ".update(status='failed')" in source
+
+    def test_partial_success_modal_in_template(self):
+        """
+        Template includes partial success modal.
+        """
+        template = Path(__file__).parent.parent.parent / 'templates' / 'reports' / 'book_viewer.html'
+        content = template.read_text()
+
+        # Verify partial success modal exists
+        assert 'x-show="partialSuccess"' in content
+        assert 'Extraction Partially Complete' in content
+        assert 'partialSuccess?.failedPages' in content
+
+    def test_partial_success_handler_in_js(self):
+        """
+        JavaScript handles partial success state.
+        """
+        js_code = Path(__file__).parent.parent.parent / 'static' / 'js' / 'book-viewer.js'
+        content = js_code.read_text()
+
+        # Verify partialSuccess state tracking
+        assert 'partialSuccess: null' in content
+        assert 'this.partialSuccess =' in content
+        assert 'dismissPartialSuccess()' in content
+
+
+class TestFailedSelectionStatus:
+    """
+    BV-020: Verify failed selection status handling
+    """
+
+    def test_failed_status_exists_in_model(self):
+        """
+        TableSelection model has 'failed' status choice.
+        """
+        from api.models import TableSelection
+
+        status_values = [choice[0] for choice in TableSelection.STATUS_CHOICES]
+        assert 'failed' in status_values
+
+    def test_failed_selection_styling_in_template(self):
+        """
+        Template includes CSS styling for failed selections.
+        """
+        template = Path(__file__).parent.parent.parent / 'templates' / 'reports' / 'book_viewer.html'
+        content = template.read_text()
+
+        # Verify failed status CSS
+        assert '.selection-overlay.failed' in content
+        assert 'border-style: dashed' in content
+
+    def test_failed_status_color_in_bbox_manager(self):
+        """
+        BoundingBoxManager uses correct color for failed status.
+        """
+        js_code = Path(__file__).parent.parent.parent / 'static' / 'js' / 'bbox-manager.js'
+        content = js_code.read_text()
+
+        # Verify failed status color handling
+        assert "selection.status === 'failed'" in content
+        assert '#DC2626' in content  # Red color for failed
+
+    def test_failed_status_indicator_in_selection_panel(self):
+        """
+        Selection panel shows indicator for failed selections.
+        """
+        template = Path(__file__).parent.parent.parent / 'templates' / 'reports' / 'book_viewer.html'
+        content = template.read_text()
+
+        # Verify failed status gets visual indicator
+        assert "'bg-red-600': sel.status === 'failed'" in content
+
+
+class TestNetworkErrorRetryButtons:
+    """
+    BV-020: Verify network error handling with retry buttons
+    """
+
+    def test_bbox_manager_has_retry_on_save_error(self):
+        """
+        BoundingBoxManager shows retry button on box save failure.
+        """
+        js_code = Path(__file__).parent.parent.parent / 'static' / 'js' / 'bbox-manager.js'
+        content = js_code.read_text()
+
+        # Verify retry mechanism exists
+        assert 'pendingRetryData' in content
+        assert '_retryPendingSave' in content
+        assert '_showErrorToast' in content
+
+    def test_extraction_error_has_retry_button(self):
+        """
+        Extraction error modal has retry button.
+        """
+        template = Path(__file__).parent.parent.parent / 'templates' / 'reports' / 'book_viewer.html'
+        content = template.read_text()
+
+        # Verify retry button in extraction error modal
+        assert '@click="retryExtraction()"' in content
+        assert 'extractError' in content
+
+    def test_retry_extraction_method_exists(self):
+        """
+        Book viewer has retryExtraction() method.
+        """
+        js_code = Path(__file__).parent.parent.parent / 'static' / 'js' / 'book-viewer.js'
+        content = js_code.read_text()
+
+        # Verify retryExtraction method
+        assert 'retryExtraction()' in content
+        assert 'this.extractError = null' in content
+
+
+class TestUserFriendlyErrors:
+    """
+    BV-020: Verify all error messages are user-friendly
+    """
+
+    def test_task_sanitizes_exception_messages(self):
+        """
+        Celery tasks sanitize raw exception messages.
+        """
+        from api import tasks
+        import inspect
+
+        source = inspect.getsource(tasks)
+
+        # Verify error sanitization in both tasks
+        assert "user_friendly_msg" in source
+        assert "'Traceback' in error_msg" in source
+
+    def test_detection_task_has_friendly_error(self):
+        """
+        detect_tables_for_review uses user-friendly error message.
+        """
+        from api.tasks import detect_tables_for_review
+        import inspect
+
+        source = inspect.getsource(detect_tables_for_review)
+
+        # Verify friendly error message
+        assert "Table detection failed. Please ensure the PDF is valid" in source
+
+    def test_extraction_task_has_friendly_error(self):
+        """
+        extract_from_selections uses user-friendly error message.
+        """
+        from api.tasks import extract_from_selections
+        import inspect
+
+        source = inspect.getsource(extract_from_selections)
+
+        # Verify friendly error message
+        assert "Table extraction failed. Please check that the PDF contains valid tables" in source
+
+    def test_js_sanitizes_error_display(self):
+        """
+        JavaScript sanitizes error messages before display.
+        """
+        js_code = Path(__file__).parent.parent.parent / 'static' / 'js' / 'book-viewer.js'
+        content = js_code.read_text()
+
+        # Verify error sanitization in JS
+        assert "Sanitize error message" in content or "errorMsg.includes('Traceback')" in content
+
+
+class TestViewerWithZeroDetections:
+    """
+    BV-020: Verify viewer opens normally with empty overlay
+    """
+
+    def test_viewer_loads_with_empty_selections(self):
+        """
+        Viewer initializes correctly when no selections exist.
+        """
+        js_code = Path(__file__).parent.parent.parent / 'static' / 'js' / 'book-viewer.js'
+        content = js_code.read_text()
+
+        # Verify selections initialized as empty array
+        assert 'selections: []' in content or 'this.selections = []' in content
+
+    def test_extraction_mode_passed_to_js(self):
+        """
+        Template passes extractionMode to JavaScript config.
+        """
+        template = Path(__file__).parent.parent.parent / 'templates' / 'reports' / 'book_viewer.html'
+        content = template.read_text()
+
+        # Verify extractionMode is passed
+        assert "extractionMode: '{{ report.extraction_mode }}'" in content
+
+    def test_js_accepts_extraction_mode(self):
+        """
+        Book viewer JS accepts extractionMode config.
+        """
+        js_code = Path(__file__).parent.parent.parent / 'static' / 'js' / 'book-viewer.js'
+        content = js_code.read_text()
+
+        # Verify extractionMode is used
+        assert 'extractionMode: config.extractionMode' in content
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

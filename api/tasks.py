@@ -230,10 +230,17 @@ def detect_tables_for_review(self, report_id):
         except Report.DoesNotExist:
             pass
 
+        # Create user-friendly error message
+        error_msg = str(e)
+        if 'Traceback' in error_msg or 'Error' in error_msg[:20]:
+            user_friendly_msg = 'Table detection failed. Please ensure the PDF is valid and try again.'
+        else:
+            user_friendly_msg = f'Detection error: {error_msg}'
+
         self.update_state(state='FAILURE', meta={
-            'status': f'Error: {str(e)}'
+            'status': user_friendly_msg
         })
-        raise
+        raise Exception(user_friendly_msg) from e
 
 
 @shared_task(bind=True)
@@ -329,6 +336,12 @@ def extract_from_selections(self, report_id):
         pages_to_process = sorted(selections_by_page.keys())
         total_pages = len(pages_to_process)
 
+        # Track failed pages for partial success reporting
+        failed_pages = []
+        selection_ids_by_page = defaultdict(list)
+        for sel in approved_selections:
+            selection_ids_by_page[sel.page_num].append(sel.id)
+
         # Process each page with its table_areas
         for i, page_num in enumerate(pages_to_process):
             progress = 10 + int(80 * (i / total_pages))
@@ -362,33 +375,59 @@ def extract_from_selections(self, report_id):
                     total_tables_extracted += len(results)
                     log.output("INFO", f"[Task {self.request.id}] Page {page_num}: saved {len(results)} table(s)")
                 else:
+                    # No tables extracted - mark selections as failed
                     log.output("WARNING", f"[Task {self.request.id}] Page {page_num}: no tables extracted from {len(table_areas)} region(s)")
+                    failed_pages.append(page_num)
+                    TableSelection.objects.filter(
+                        id__in=selection_ids_by_page[page_num]
+                    ).update(status='failed')
 
             except Exception as page_error:
                 log.output("WARNING", f"[Task {self.request.id}] Page {page_num} extraction failed: {str(page_error)}")
+                failed_pages.append(page_num)
+                # Mark selections for this page as failed
+                TableSelection.objects.filter(
+                    id__in=selection_ids_by_page[page_num]
+                ).update(status='failed')
                 # Continue with other pages
 
         # Update status to completed
         report.extraction_status = 'completed'
         report.save(update_fields=['extraction_status'])
 
+        # Determine final status message
+        if failed_pages:
+            if total_tables_extracted > 0:
+                status_msg = f'Partial extraction complete. {len(failed_pages)} page(s) failed.'
+            else:
+                status_msg = 'Extraction failed on all pages.'
+        else:
+            status_msg = 'Extraction complete'
+
         self.update_state(state='PROGRESS', meta={
             'current': 100,
             'total': 100,
-            'status': 'Extraction complete'
+            'status': status_msg
         })
 
         end = timer()
         duration = format_timespan(end - start)
         log.output("INFO", f"[Task {self.request.id}] Extraction completed in {duration}, {total_tables_extracted} tables extracted")
 
-        return {
-            'status': 'completed',
+        result = {
+            'status': 'completed' if total_tables_extracted > 0 else 'partial_failure',
             'report_id': report_id,
             'tables_extracted': total_tables_extracted,
             'pages_processed': len(pages_to_process),
             'duration': duration
         }
+
+        # Include failed pages info for partial success reporting
+        if failed_pages:
+            result['failed_pages'] = failed_pages
+            result['message'] = f'Extraction completed with {len(failed_pages)} failed page(s): {", ".join(str(p) for p in sorted(failed_pages))}'
+
+        return result
 
     except Exception as e:
         log.output("ERROR", f"[Task {self.request.id}] Extraction from selections failed: {str(e)}")
@@ -401,7 +440,15 @@ def extract_from_selections(self, report_id):
         except Report.DoesNotExist:
             pass
 
+        # Create user-friendly error message
+        error_msg = str(e)
+        if 'Traceback' in error_msg or 'Error' in error_msg[:20]:
+            # Looks like a raw exception, provide a user-friendly message
+            user_friendly_msg = 'Table extraction failed. Please check that the PDF contains valid tables and try again.'
+        else:
+            user_friendly_msg = f'Extraction error: {error_msg}'
+
         self.update_state(state='FAILURE', meta={
-            'status': f'Error: {str(e)}'
+            'status': user_friendly_msg
         })
-        raise
+        raise Exception(user_friendly_msg) from e

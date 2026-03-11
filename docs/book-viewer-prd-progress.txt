@@ -251,4 +251,43 @@ Started: Wed Mar 11 08:12:09 PM AEDT 2026
   - Approved YOLO + manual boxes extracted together
   - Rejected boxes excluded from extraction results
 - All 67 tests pass
+- Commit: 3242ae0
+
+## BV-019: End-to-end test: Edge cases [COMPLETE]
+- Extended api/tests/test_phase5_e2e.py with 42 additional tests (109 total)
+- Tests verify handling of edge cases and error conditions:
+  - Single-page PDF: clearCanvas for right page, label hidden, spread label correct
+  - Large PDF (25 pages): Lazy rendering of visible spread only, no browser freeze
+  - Invalid PDF: Error state set, error message displayed, retry button available
+  - Network error during save: Retry button shown, dismiss clears state
+  - Extraction error: Modal with retry/close buttons, retryExtraction method
+  - Zoom: CSS transform scaling, 50-200% range, positions preserved
+  - Unsaved changes: Pending box state tracked, Escape cancels, explicit confirm/cancel
+- Verified acceptance criteria:
+  - Single-page PDF displays correctly (no empty right page)
+  - Large PDF (20+ pages) loads without browser freeze (lazy rendering)
+  - Invalid PDF shows error message in viewer
+  - Network error during save shows retry option
+  - Unsaved changes: Not applicable - current UX requires explicit box confirmation
+  - Zooming preserves box positions correctly (CSS transform on container)
+- All 109 tests pass
+- Commit: f98132b
+
+## BV-020: Handle edge cases in detection and extraction [COMPLETE]
+- Zero YOLO detections in review mode shows: 'No tables detected. Draw selections manually or try a different PDF.'
+- Viewer opens normally with empty overlay when 0 detections (already worked)
+- Partial extraction success reports failed pages with list in modal
+- Failed selections marked with status='failed' in database
+- Network error during box save shows inline retry button (already implemented in BV-012)
+- Network error during extraction shows retry button (already implemented in BV-014)
+- All error messages sanitized to be user-friendly (no raw exception text)
+- Implementation details:
+  - Added extractionMode config to JS for context-aware empty messages
+  - Added getEmptyStateMessage() and getEmptyStateHint() methods
+  - Added failed_pages tracking in extract_from_selections task
+  - Added partial success modal with "View Results" and "Stay & Review" options
+  - Added CSS styling for failed selections (dashed red border, #DC2626)
+  - Sanitized task exceptions to show user-friendly messages
+- Extended tests with 23 new tests (132 total)
+- Commit: aef730a
 

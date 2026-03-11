@@ -41,6 +41,11 @@
         background: rgba(239, 68, 68, 0.1);
         opacity: 0.4;
     }
+    .selection-overlay.failed {
+        border-color: #DC2626;
+        background: rgba(220, 38, 38, 0.15);
+        border-style: dashed;
+    }
     /* Review controls on YOLO boxes */
     .selection-overlay .review-controls {
         position: absolute;
@@ -396,6 +401,45 @@
         </div>
     </div>
 
+    <!-- Partial Success Modal -->
+    <div x-show="partialSuccess" x-cloak class="fixed inset-0 bg-gray-900 bg-opacity-50 flex items-center justify-center z-50">
+        <div class="bg-white rounded-lg shadow-xl p-6 max-w-md w-full mx-4">
+            <div class="flex items-start space-x-4">
+                <div class="flex-shrink-0">
+                    <svg class="h-6 w-6 text-yellow-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                    </svg>
+                </div>
+                <div class="flex-1">
+                    <h3 class="text-lg font-medium text-gray-900 mb-2">Extraction Partially Complete</h3>
+                    <p class="text-sm text-gray-600 mb-2">
+                        Extracted <span class="font-medium" x-text="partialSuccess?.tablesExtracted || 0"></span> table(s) successfully.
+                    </p>
+                    <p class="text-sm text-gray-600 mb-4">
+                        Failed to extract from page(s): <span class="font-medium text-red-600" x-text="partialSuccess?.failedPages?.join(', ') || ''"></span>
+                    </p>
+                    <p class="text-xs text-gray-500 mb-4">
+                        Failed selections have been marked. You can try adjusting them and extracting again.
+                    </p>
+                    <div class="flex space-x-3">
+                        <button
+                            @click="dismissPartialSuccess()"
+                            class="px-4 py-2 bg-primary text-white text-sm font-medium rounded-md hover:bg-primary-dark focus:outline-none focus:ring-2 focus:ring-primary"
+                        >
+                            View Results
+                        </button>
+                        <button
+                            @click="partialSuccess = null; loadSelections()"
+                            class="px-4 py-2 bg-white border border-gray-300 text-gray-700 text-sm font-medium rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-300"
+                        >
+                            Stay & Review
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Selection Panel -->
     <div x-show="!loading && !error" x-cloak class="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
         <div class="flex items-center justify-between mb-3">
@@ -424,8 +468,8 @@
             <svg class="mx-auto h-10 w-10 text-gray-400 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"></path>
             </svg>
-            <p>No table selections yet.</p>
-            <p class="text-sm mt-1">Switch to "Select Tables" mode and draw boxes around tables.</p>
+            <p x-text="getEmptyStateMessage()"></p>
+            <p class="text-sm mt-1" x-text="getEmptyStateHint()"></p>
         </div>
 
         <div x-show="selections.length > 0" class="space-y-2 max-h-48 overflow-y-auto">
@@ -437,7 +481,8 @@
                             :class="{
                                 'bg-yellow-400': sel.status === 'pending',
                                 'bg-green-400': sel.status === 'approved',
-                                'bg-red-400': sel.status === 'rejected'
+                                'bg-red-400': sel.status === 'rejected',
+                                'bg-red-600': sel.status === 'failed'
                             }"
                         ></span>
                         <span class="text-sm text-gray-700">
@@ -504,7 +549,8 @@
     window.bookViewer = function() {
         return createBookViewer({
             reportId: {{ report.id }},
-            pdfUrl: '{{ report.document.url }}'
+            pdfUrl: '{{ report.document.url }}',
+            extractionMode: '{{ report.extraction_mode }}'
         });
     };
 </script>

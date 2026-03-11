@@ -14,6 +14,7 @@ export function createBookViewer(config) {
         // Configuration
         reportId: config.reportId,
         pdfUrl: config.pdfUrl,
+        extractionMode: config.extractionMode || 'auto',
 
         // PDF state
         pdfDoc: null,
@@ -48,6 +49,7 @@ export function createBookViewer(config) {
         extractProgress: null,
         extractError: null,
         extractTaskId: null,
+        partialSuccess: null, // Tracks partial success info
 
         /**
          * Initialize the viewer - load PDF and selections
@@ -614,8 +616,18 @@ export function createBookViewer(config) {
                 });
 
                 if (!response.ok) {
-                    const errorData = await response.json();
-                    throw new Error(errorData.error || 'Failed to start extraction');
+                    let errorMsg = 'Failed to start extraction';
+                    try {
+                        const errorData = await response.json();
+                        errorMsg = errorData.error || errorMsg;
+                        // Sanitize technical error messages
+                        if (errorMsg.includes('Traceback') || errorMsg.includes('Exception')) {
+                            errorMsg = 'Unable to start extraction. Please try again.';
+                        }
+                    } catch {
+                        // JSON parsing failed, use default message
+                    }
+                    throw new Error(errorMsg);
                 }
 
                 const data = await response.json();
@@ -656,6 +668,18 @@ export function createBookViewer(config) {
                             total: data.progress.total || this.getApprovedCount()
                         };
                     } else if (data.state === 'SUCCESS') {
+                        const result = data.result || {};
+                        // Handle partial success
+                        if (result.failed_pages && result.failed_pages.length > 0) {
+                            this.partialSuccess = {
+                                tablesExtracted: result.tables_extracted || 0,
+                                failedPages: result.failed_pages
+                            };
+                            this.extractProgress = null;
+                            this.extracting = false;
+                            // Show partial success modal instead of redirecting immediately
+                            return;
+                        }
                         this.extractProgress = { message: 'Extraction complete!', current: 100, total: 100 };
                         // Redirect to report detail page after a brief delay
                         setTimeout(() => {
@@ -663,7 +687,13 @@ export function createBookViewer(config) {
                         }, 1000);
                         return;
                     } else if (data.state === 'FAILURE') {
-                        throw new Error(data.error || 'Extraction failed');
+                        // Sanitize error message for user display
+                        let errorMsg = data.error || 'Extraction failed';
+                        // Remove technical details if present
+                        if (errorMsg.includes('Traceback') || errorMsg.includes('Exception')) {
+                            errorMsg = 'Table extraction failed. Please check the PDF and try again.';
+                        }
+                        throw new Error(errorMsg);
                     }
 
                     // Wait before next poll
@@ -697,6 +727,44 @@ export function createBookViewer(config) {
         retryExtraction() {
             this.extractError = null;
             this.startExtraction();
+        },
+
+        /**
+         * Close partial success modal and go to results
+         */
+        dismissPartialSuccess() {
+            this.partialSuccess = null;
+            window.location.href = `/reports/${this.reportId}/`;
+        },
+
+        /**
+         * Check if this is a "zero detections" scenario in review mode
+         * @returns {boolean}
+         */
+        isZeroDetectionsReviewMode() {
+            return this.extractionMode === 'review' && this.selections.length === 0;
+        },
+
+        /**
+         * Get the empty state message based on extraction mode
+         * @returns {string}
+         */
+        getEmptyStateMessage() {
+            if (this.extractionMode === 'review') {
+                return 'No tables detected. Draw selections manually or try a different PDF.';
+            }
+            return 'No table selections yet.';
+        },
+
+        /**
+         * Get the empty state hint based on extraction mode
+         * @returns {string}
+         */
+        getEmptyStateHint() {
+            if (this.extractionMode === 'review') {
+                return 'You can still draw boxes around tables manually using the "Select Tables" mode.';
+            }
+            return 'Switch to "Select Tables" mode and draw boxes around tables.';
         }
     };
 }

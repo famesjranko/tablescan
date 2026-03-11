@@ -1,0 +1,401 @@
+{
+  "project": "Book Viewer - Manual Table Selection",
+  "description": "Add book-style PDF viewer with manual table region selection and review workflow",
+  "repository": "/home/andy/automated-PDF-tabulated-data-extractor-api",
+  "commitPrefix": "feat",
+  "workflow": {
+    "1-Analyze": "Read existing code and understand the context",
+    "2-Plan": "Design the solution within existing architecture",
+    "3-Implement": "Write the code",
+    "4-Test": "Verify it works manually or with tests",
+    "5-Commit": "Commit with descriptive message"
+  },
+  "userStories": [
+    {
+      "id": "BV-001",
+      "phase": 1,
+      "title": "Add TableSelection model",
+      "description": "Create model to store table region selections (auto-detected or manual) with approval status",
+      "acceptanceCriteria": [
+        "File api/models.py contains TableSelection model",
+        "Fields: report (FK with CASCADE delete), page_num (PositiveIntegerField)",
+        "Fields: x1, y1, x2, y2 (FloatFields for PDF coords, bottom-left origin)",
+        "Fields: confidence (nullable FloatField for YOLO confidence)",
+        "Fields: source (CharField with choices: 'yolo', 'manual')",
+        "Fields: status (CharField with choices: 'pending', 'approved', 'rejected', 'failed')",
+        "Fields: created_at (DateTimeField auto_now_add)",
+        "Migration created and applied successfully",
+        "Existing data unaffected"
+      ],
+      "files": ["api/models.py"],
+      "passes": true
+    },
+    {
+      "id": "BV-002",
+      "phase": 1,
+      "title": "Add extraction_mode and extraction_status to Report model",
+      "description": "Add fields to track which extraction workflow the user chose and current processing state",
+      "acceptanceCriteria": [
+        "Report model has extraction_mode field with choices: 'auto', 'manual', 'review'",
+        "Default extraction_mode is 'auto'",
+        "Report model has extraction_status field with choices: 'uploaded', 'detecting', 'pending_review', 'extracting', 'completed', 'failed'",
+        "Default extraction_status is 'uploaded'",
+        "Migration created and applied successfully",
+        "Existing reports get extraction_mode='auto' and extraction_status='completed'"
+      ],
+      "files": ["api/models.py"],
+      "passes": true
+    },
+    {
+      "id": "BV-003",
+      "phase": 1,
+      "title": "Create TableSelectionSerializer",
+      "description": "Add serializer for TableSelection model CRUD operations with proper validation",
+      "acceptanceCriteria": [
+        "TableSelectionSerializer in api/serializers.py",
+        "Includes fields: id, report, page_num, x1, y1, x2, y2, confidence, source, status, created_at",
+        "report field is read-only (set from URL in view)",
+        "Validates all coordinates are non-negative floats",
+        "Validates x1 < x2 and y1 < y2 (proper box orientation)",
+        "Validates page_num is within report's total_pages",
+        "source defaults to 'manual' if not provided",
+        "status defaults to 'approved' for manual source, 'pending' for yolo source"
+      ],
+      "files": ["api/serializers.py"],
+      "passes": true
+    },
+    {
+      "id": "BV-004",
+      "phase": 2,
+      "title": "Add PDF metadata API endpoint",
+      "description": "Create endpoint to get PDF page count and dimensions for viewer initialization",
+      "acceptanceCriteria": [
+        "GET /api/reports/{id}/metadata/ endpoint exists",
+        "Returns JSON: {total_pages, pages: [{page_num, width, height, rotation}, ...]}",
+        "Uses PyMuPDF (fitz) to read page dimensions and rotation",
+        "Handles rotated pages correctly (swap width/height for 90/270 rotation)",
+        "Only accessible by report owner (IsReportOwner permission)",
+        "Returns 404 for invalid report ID"
+      ],
+      "files": ["api/views.py", "tablescan/urls.py"],
+      "reviewQuestions": [
+        "Check how existing code uses fitz/PyMuPDF",
+        "Consider caching metadata to avoid repeated PDF reads"
+      ],
+      "passes": true
+    },
+    {
+      "id": "BV-005",
+      "phase": 2,
+      "title": "Add TableSelection CRUD API endpoints",
+      "description": "Create endpoints for listing, creating, updating, and deleting table selections",
+      "acceptanceCriteria": [
+        "GET /api/reports/{id}/selections/ lists selections for report",
+        "GET supports optional ?page_num= query param to filter by page",
+        "GET supports optional ?status= query param to filter by status (comma-separated, e.g., ?status=pending,approved)",
+        "POST /api/reports/{id}/selections/ creates new selection (sets report from URL)",
+        "PATCH /api/reports/{id}/selections/{sel_id}/ updates status field only",
+        "DELETE /api/reports/{id}/selections/{sel_id}/ removes selection",
+        "All endpoints require authentication and report ownership",
+        "Returns 404 if selection doesn't belong to the report"
+      ],
+      "files": ["api/views.py", "tablescan/urls.py"],
+      "passes": true
+    },
+    {
+      "id": "BV-006",
+      "phase": 2,
+      "title": "Create standalone YOLO detection function",
+      "description": "Refactor YOLO detection to return bounding boxes without extracting tables",
+      "acceptanceCriteria": [
+        "New function in api/scripts/YOLOV3/predict_table.py: detect_table_regions(file_path, page_number)",
+        "Returns list of dicts: [{x1, y1, x2, y2, confidence}, ...]",
+        "Coordinates in PDF space (bottom-left origin)",
+        "Reuses existing YOLO inference code (detectTable, outpout_yolo, bboxes_pdf)",
+        "Does NOT call Camelot or save to database",
+        "Cleans up temporary image files",
+        "Unit test verifies it returns bounding boxes for a test PDF",
+        "Coordinates computed using bboxes_pdf() which applies Y-flip: y = (1 - y_norm) * H_pdf"
+      ],
+      "files": ["api/scripts/YOLOV3/predict_table.py", "api/tests/test_predict_table.py"],
+      "reviewQuestions": [
+        "Look at existing detect_tables() function structure",
+        "Reuse norm_bbox() and bboxes_pdf() for coordinate conversion",
+        "Reference bboxes_pdf() at predict_table.py:152-172 for the Y-flip math"
+      ],
+      "passes": true
+    },
+    {
+      "id": "BV-007",
+      "phase": 2,
+      "title": "Add detect-for-review Celery task",
+      "description": "Create task that runs YOLO detection and saves boxes as TableSelection records",
+      "acceptanceCriteria": [
+        "New Celery task: detect_tables_for_review(report_id) in api/tasks.py",
+        "Updates Report.extraction_status to 'detecting' at start",
+        "Calls detect_table_regions() for each page in range",
+        "Saves detected boxes as TableSelection(source='yolo', status='pending')",
+        "Updates Report.extraction_status to 'pending_review' on success",
+        "Updates Report.extraction_status to 'failed' on error",
+        "Returns {status, report_id, selections_count, redirect_url} for frontend"
+      ],
+      "files": ["api/tasks.py"],
+      "reviewQuestions": [
+        "Use existing TaskStatusView at /task-status/<task_id>/ (see api/views.py:486-504)"
+      ],
+      "passes": true
+    },
+    {
+      "id": "BV-008",
+      "phase": 2,
+      "title": "Add extract-from-selections Celery task and endpoint",
+      "description": "Create task and API endpoint to extract tables using approved selections",
+      "acceptanceCriteria": [
+        "New Celery task: extract_from_selections(report_id) in api/tasks.py",
+        "Gets TableSelection records where status='approved' (includes both YOLO-approved and manual selections, since manual is auto-approved per BV-003)",
+        "Groups selections by page_num",
+        "Builds table_areas list as [(x1, y1, x2, y2), ...] for each page",
+        "table_areas coordinates in PDF space (bottom-left origin, same format as stored in TableSelection)",
+        "Calls MultiExtractor.extract_best(pdf_path, page, table_areas=[...])",
+        "Saves results to Extracted model",
+        "Updates Report.extraction_status to 'completed'",
+        "POST /api/reports/{id}/extract-selections/ endpoint triggers this task",
+        "Endpoint returns {task_id, status} for polling"
+      ],
+      "files": ["api/tasks.py", "api/views.py", "tablescan/urls.py"],
+      "reviewQuestions": [
+        "Look at api/scripts/extractors/multi_extractor.py for extract_best() signature",
+        "Look at existing extract_tables_async_task for save pattern",
+        "Use existing TaskStatusView at /task-status/<task_id>/ for polling extraction status"
+      ],
+      "passes": true
+    },
+    {
+      "id": "BV-009",
+      "phase": 3,
+      "title": "Add book viewer Django view and URL",
+      "description": "Create the view that renders the book viewer template",
+      "acceptanceCriteria": [
+        "BookViewerView class in api/views.py (LoginRequiredMixin, View)",
+        "URL pattern: /reports/<int:pk>/viewer/ maps to BookViewerView",
+        "Verifies report ownership (returns 403 if not owner)",
+        "Passes report object and CSRF token to template context",
+        "Returns 404 for invalid report ID"
+      ],
+      "files": ["api/views.py", "tablescan/urls.py"],
+      "passes": true
+    },
+    {
+      "id": "BV-010",
+      "phase": 3,
+      "title": "Create book viewer template",
+      "description": "Create the main HTML template for the book-style PDF viewer",
+      "acceptanceCriteria": [
+        "New file: templates/reports/viewer.html extends base.html",
+        "Includes PDF.js via CDN (version 4.x, ES module)",
+        "Has two-page spread layout with left and right page containers",
+        "Has navigation controls (prev/next spread buttons)",
+        "Has mode toggle between 'View' and 'Select Tables'",
+        "Has zoom controls (+/- buttons with percentage display)",
+        "Shows page numbers below each page",
+        "Includes selection panel at bottom showing current selections with count",
+        "Shows loading spinner while PDF loads",
+        "Shows error message if PDF fails to load",
+        "Includes CSRF token in meta tag for JS access"
+      ],
+      "files": ["templates/reports/viewer.html"],
+      "passes": true
+    },
+    {
+      "id": "BV-011",
+      "phase": 3,
+      "title": "Create book viewer Alpine.js component",
+      "description": "Implement the PDF rendering and navigation logic",
+      "acceptanceCriteria": [
+        "New file: static/js/book-viewer.js",
+        "Alpine.js component that loads PDF with PDF.js",
+        "Renders two pages side-by-side (spread layout)",
+        "currentSpread state (0 = pages 1-2, 1 = pages 3-4, etc.)",
+        "Handles single-page PDFs and odd page counts gracefully",
+        "Prev/next navigation updates spread and re-renders",
+        "Page number input field allows direct navigation to specific page (validates 1 to totalPages)",
+        "Stores PDF page dimensions in canvas.dataset for coordinate conversion",
+        "Zoom controls scale the viewport (0.5x to 2.0x range)",
+        "Shows loading state during page render",
+        "Handles render errors gracefully with user feedback"
+      ],
+      "files": ["static/js/book-viewer.js"],
+      "reviewQuestions": [
+        "PDF.js 4.x uses ES modules - ensure proper import pattern",
+        "Consider lazy loading for large PDFs (only render visible pages)"
+      ],
+      "passes": true
+    },
+    {
+      "id": "BV-012",
+      "phase": 3,
+      "title": "Create bounding box manager component",
+      "description": "Implement canvas overlay for displaying and drawing table selections",
+      "acceptanceCriteria": [
+        "New file: static/js/bbox-manager.js",
+        "Overlay canvas positioned absolutely on top of each PDF page canvas",
+        "Loads existing selections from API on page render",
+        "Color-codes boxes: orange (YOLO pending), green (approved), blue (manual)",
+        "Mouse events for drawing new boxes (mousedown, mousemove, mouseup)",
+        "Ignores boxes smaller than 20x20 canvas pixels (accidental clicks)",
+        "Click existing box to select it (highlight + show controls)",
+        "Coordinate conversion: canvasToPdf() and pdfToCanvas() functions",
+        "canvasToPdf() applies Y-axis flip: pdf_y = page_height - canvas_y (PDF uses bottom-left origin, canvas uses top-left)",
+        "pdfToCanvas() applies inverse Y-axis flip: canvas_y = page_height - pdf_y",
+        "After drawing, shows confirm/cancel buttons before saving to API (allows undo before commit)",
+        "Pressing Escape or clicking cancel removes the pending box without API call",
+        "Saves new selections to API on confirm with CSRF token",
+        "Shows error toast if API save fails with retry option"
+      ],
+      "files": ["static/js/bbox-manager.js"],
+      "reviewQuestions": [
+        "Reference api/scripts/YOLOV3/predict_table.py:152 bboxes_pdf() for transformation math",
+        "Get CSRF token from meta tag: document.querySelector('meta[name=csrf-token]').content"
+      ],
+      "passes": true
+    },
+    {
+      "id": "BV-013",
+      "phase": 3,
+      "title": "Add review controls for YOLO detections",
+      "description": "Show approve/reject buttons on YOLO-detected boxes in the viewer",
+      "acceptanceCriteria": [
+        "YOLO boxes (source='yolo', status='pending') show approve (checkmark) and reject (X) icons",
+        "Icons appear on hover or when box is selected",
+        "Clicking approve calls PATCH API to set status='approved'",
+        "Clicking reject calls PATCH API to set status='rejected'",
+        "Rejected boxes fade out or show with reduced opacity",
+        "Box color updates immediately on status change",
+        "Includes CSRF token in PATCH requests",
+        "Shows error feedback if API call fails"
+      ],
+      "files": ["static/js/bbox-manager.js", "templates/reports/viewer.html"],
+      "passes": true
+    },
+    {
+      "id": "BV-014",
+      "phase": 4,
+      "title": "Add extract button and extraction flow to viewer",
+      "description": "Add button in viewer to trigger extraction of approved/manual selections",
+      "acceptanceCriteria": [
+        "Extract Selected Tables button visible in selection panel",
+        "Button shows count of approved selections (manual selections are auto-approved per BV-003)",
+        "Button disabled if count is 0",
+        "Clicking triggers POST to /api/reports/{id}/extract-selections/",
+        "Shows loading state with progress indicator during extraction",
+        "Polls task status endpoint until complete",
+        "Redirects to report detail page on success",
+        "Shows error message on failure with retry option"
+      ],
+      "files": ["templates/reports/viewer.html", "static/js/book-viewer.js"],
+      "passes": true
+    },
+    {
+      "id": "BV-015",
+      "phase": 4,
+      "title": "Add extraction mode selector to upload page",
+      "description": "Let users choose extraction workflow at upload time",
+      "acceptanceCriteria": [
+        "Radio buttons on upload.html: Automatic (default), Auto + Review, Manual Selection",
+        "Brief description under each option explaining the workflow",
+        "Selection saved to Report.extraction_mode on upload",
+        "Automatic: existing flow - extract immediately, redirect to results",
+        "Auto + Review: triggers detect_tables_for_review task, polls status, redirects to viewer when 'pending_review'",
+        "Manual: sets extraction_status='pending_review', redirects directly to viewer",
+        "Progress indicator shown during detection phase for Auto + Review"
+      ],
+      "files": ["templates/upload.html", "api/views.py"],
+      "passes": true
+    },
+    {
+      "id": "BV-016",
+      "phase": 4,
+      "title": "Add Open Viewer link to report detail page",
+      "description": "Allow users to access viewer from existing report detail page",
+      "acceptanceCriteria": [
+        "Link/button on reports/detail.html: 'Open Book Viewer'",
+        "Styled consistently with other action buttons",
+        "Links to /reports/{id}/viewer/",
+        "Visible for all reports regardless of extraction_mode"
+      ],
+      "files": ["templates/reports/detail.html"],
+      "passes": true
+    },
+    {
+      "id": "BV-017",
+      "phase": 5,
+      "title": "End-to-end test: Manual selection flow",
+      "description": "Verify the complete manual selection workflow",
+      "acceptanceCriteria": [
+        "Upload PDF with 'Manual Selection' mode",
+        "Verify extraction_mode='manual' and extraction_status='pending_review' in DB",
+        "Redirected to book viewer with blank overlay (no YOLO boxes)",
+        "Draw 2-3 boxes on different pages",
+        "Verify boxes saved to TableSelection table with source='manual', status='approved'",
+        "Click Extract - verify task runs",
+        "Verify Extracted records created only for drawn regions",
+        "Verify CSVs contain correct table data"
+      ],
+      "reviewQuestions": [
+        "Use a PDF with clearly visible tables for accurate verification",
+        "Check coordinate transformation accuracy by comparing CSV content to visual region"
+      ],
+      "passes": true
+    },
+    {
+      "id": "BV-018",
+      "phase": 5,
+      "title": "End-to-end test: Auto + Review flow",
+      "description": "Verify the complete auto-detection with review workflow",
+      "acceptanceCriteria": [
+        "Upload PDF with 'Auto + Review' mode",
+        "Verify YOLO detection task starts (check Celery logs or task status)",
+        "Verify extraction_status transitions: 'detecting' -> 'pending_review'",
+        "Redirected to viewer with detected boxes shown in orange",
+        "Approve some boxes (turn green), reject others (fade out)",
+        "Add a manual box for a missed table",
+        "Click Extract",
+        "Verify only approved YOLO + manual boxes extracted",
+        "Rejected boxes NOT in Extracted results"
+      ],
+      "passes": true
+    },
+    {
+      "id": "BV-019",
+      "phase": 5,
+      "title": "End-to-end test: Edge cases",
+      "description": "Verify handling of edge cases and error conditions",
+      "acceptanceCriteria": [
+        "Single-page PDF displays correctly (no empty right page)",
+        "Large PDF (20+ pages) loads without browser freeze",
+        "Invalid PDF shows error message in viewer",
+        "Network error during save shows retry option",
+        "Navigating away with unsaved changes shows warning (if applicable)",
+        "Zooming preserves box positions correctly"
+      ],
+      "passes": true
+    },
+    {
+      "id": "BV-020",
+      "phase": 4,
+      "title": "Handle edge cases in detection and extraction",
+      "description": "Gracefully handle zero YOLO detections, partial extraction failures, and network errors",
+      "acceptanceCriteria": [
+        "If YOLO detects 0 tables on all pages, show message: 'No tables detected. Draw selections manually or try a different PDF.'",
+        "Viewer still opens normally with empty overlay when 0 detections",
+        "If extraction fails for some selections but succeeds for others, report partial success with list of failed pages",
+        "Failed selections are marked with status='failed' (uses status choice added in BV-001)",
+        "Network error during box save shows inline retry button on the failed box",
+        "Network error during extraction shows retry button with error message",
+        "All error messages are user-friendly (no raw exception text)"
+      ],
+      "files": ["api/models.py", "api/tasks.py", "static/js/bbox-manager.js", "static/js/book-viewer.js"],
+      "passes": true
+    }
+  ]
+}

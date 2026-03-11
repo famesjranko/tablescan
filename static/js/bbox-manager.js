@@ -131,6 +131,9 @@ export class BoundingBoxManager {
      * @returns {string} CSS color
      */
     getBoxColor(selection) {
+        if (selection.status === 'failed') {
+            return '#DC2626'; // Red for failed extraction
+        }
         if (selection.source === 'manual') {
             return '#3B82F6'; // Blue for manual
         }
