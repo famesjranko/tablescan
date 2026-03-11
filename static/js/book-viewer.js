@@ -451,6 +451,138 @@ export function createBookViewer(config) {
          */
         getApprovedCount() {
             return this.selections.filter(s => s.status === 'approved').length;
+        },
+
+        /**
+         * Update selection status (approve/reject)
+         * @param {number} selId - Selection ID
+         * @param {string} status - New status ('approved' or 'rejected')
+         */
+        async updateSelectionStatus(selId, status) {
+            try {
+                const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content;
+                const response = await fetch(`/api/reports/${this.reportId}/selections/${selId}/`, {
+                    method: 'PATCH',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': csrfToken
+                    },
+                    body: JSON.stringify({ status })
+                });
+
+                if (response.ok) {
+                    const updated = await response.json();
+                    const index = this.selections.findIndex(s => s.id === selId);
+                    if (index >= 0) {
+                        this.selections[index] = updated;
+                    }
+                    return true;
+                } else {
+                    const errorText = await response.text();
+                    this.showStatusError('Failed to update status: ' + errorText);
+                    return false;
+                }
+            } catch (err) {
+                console.error('Error updating selection status:', err);
+                this.showStatusError('Network error: Could not update selection');
+                return false;
+            }
+        },
+
+        /**
+         * Approve a YOLO detection
+         * @param {number} selId - Selection ID
+         */
+        async approveSelection(selId) {
+            await this.updateSelectionStatus(selId, 'approved');
+        },
+
+        /**
+         * Reject a YOLO detection
+         * @param {number} selId - Selection ID
+         */
+        async rejectSelection(selId) {
+            await this.updateSelectionStatus(selId, 'rejected');
+        },
+
+        /**
+         * Show error toast for status update failures
+         * @param {string} message - Error message
+         */
+        showStatusError(message) {
+            // Remove existing toast
+            const existingToast = document.getElementById('status-error-toast');
+            if (existingToast) {
+                existingToast.remove();
+            }
+
+            // Create toast container
+            const toast = document.createElement('div');
+            toast.id = 'status-error-toast';
+            toast.className = 'fixed bottom-4 right-4 bg-red-50 border border-red-200 rounded-lg p-4 shadow-lg z-50 max-w-sm';
+
+            // Create flex container
+            const flexContainer = document.createElement('div');
+            flexContainer.className = 'flex items-start space-x-3';
+
+            // Create error icon
+            const iconSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+            iconSvg.setAttribute('class', 'w-5 h-5 text-red-500 flex-shrink-0 mt-0.5');
+            iconSvg.setAttribute('fill', 'currentColor');
+            iconSvg.setAttribute('viewBox', '0 0 20 20');
+            const iconPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+            iconPath.setAttribute('fill-rule', 'evenodd');
+            iconPath.setAttribute('d', 'M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z');
+            iconPath.setAttribute('clip-rule', 'evenodd');
+            iconSvg.appendChild(iconPath);
+
+            // Create message container
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'flex-1';
+            const messageP = document.createElement('p');
+            messageP.className = 'text-sm text-red-800';
+            messageP.textContent = message;
+            messageDiv.appendChild(messageP);
+
+            // Create close button
+            const closeBtn = document.createElement('button');
+            closeBtn.className = 'text-red-400 hover:text-red-600';
+            closeBtn.onclick = () => toast.remove();
+            const closeSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+            closeSvg.setAttribute('class', 'w-4 h-4');
+            closeSvg.setAttribute('fill', 'none');
+            closeSvg.setAttribute('stroke', 'currentColor');
+            closeSvg.setAttribute('viewBox', '0 0 24 24');
+            const closePath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+            closePath.setAttribute('stroke-linecap', 'round');
+            closePath.setAttribute('stroke-linejoin', 'round');
+            closePath.setAttribute('stroke-width', '2');
+            closePath.setAttribute('d', 'M6 18L18 6M6 6l12 12');
+            closeSvg.appendChild(closePath);
+            closeBtn.appendChild(closeSvg);
+
+            // Assemble
+            flexContainer.appendChild(iconSvg);
+            flexContainer.appendChild(messageDiv);
+            flexContainer.appendChild(closeBtn);
+            toast.appendChild(flexContainer);
+            document.body.appendChild(toast);
+
+            // Auto-dismiss after 5 seconds
+            setTimeout(() => {
+                if (toast.parentElement) {
+                    toast.remove();
+                }
+            }, 5000);
+        },
+
+        /**
+         * Check if a selection is a reviewable YOLO detection
+         * @param {Object} sel - Selection object
+         * @returns {boolean}
+         */
+        isYoloPending(sel) {
+            return sel.source === 'yolo' && sel.status === 'pending';
         }
     };
 }
