@@ -1,0 +1,538 @@
+{% extends 'base.html' %}
+
+{% block title %}{{ report.name }} - Book Viewer{% endblock %}
+
+{% block extra_head %}
+<meta name="csrf-token" content="{{ csrf_token }}">
+<style>
+    .book-viewer-main {
+        max-width: 100%;
+    }
+    .page-container {
+        background: #e5e7eb;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 400px;
+        position: relative;
+    }
+    .page-container canvas {
+        max-width: 100%;
+        max-height: 100%;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+        background: white;
+    }
+    .selection-overlay {
+        position: absolute;
+        border: 2px solid #3B82F6;
+        background: rgba(59, 130, 246, 0.1);
+        pointer-events: none;
+    }
+    .selection-overlay.pending {
+        border-color: #F59E0B;
+        background: rgba(245, 158, 11, 0.1);
+    }
+    .selection-overlay.approved {
+        border-color: #10B981;
+        background: rgba(16, 185, 129, 0.1);
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div x-data="bookViewer()" x-init="init()" class="book-viewer-main">
+    <!-- Header -->
+    <div class="mb-4">
+        <div class="flex items-center space-x-2 text-sm text-gray-500 mb-2">
+            <a href="{% url 'reports_list' %}" class="hover:text-gray-700">Reports</a>
+            <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                <path fill-rule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clip-rule="evenodd"/>
+            </svg>
+            <span class="text-gray-900">{{ report.name }}</span>
+        </div>
+        <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <h1 class="text-2xl font-bold text-gray-900">Book Viewer</h1>
+            <a href="{% url 'report_detail' report.id %}" class="inline-flex items-center px-3 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">
+                <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path>
+                </svg>
+                Back to Report
+            </a>
+        </div>
+    </div>
+
+    <!-- Toolbar -->
+    <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-3 mb-4">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+            <!-- Mode Toggle -->
+            <div class="flex items-center space-x-2">
+                <span class="text-sm font-medium text-gray-700">Mode:</span>
+                <div class="inline-flex rounded-md shadow-sm">
+                    <button
+                        @click="mode = 'view'"
+                        :class="mode === 'view' ? 'bg-primary text-white' : 'bg-white text-gray-700 hover:bg-gray-50'"
+                        class="px-3 py-1.5 text-sm font-medium border border-gray-300 rounded-l-md focus:outline-none focus:ring-2 focus:ring-primary"
+                    >
+                        View
+                    </button>
+                    <button
+                        @click="mode = 'select'"
+                        :class="mode === 'select' ? 'bg-primary text-white' : 'bg-white text-gray-700 hover:bg-gray-50'"
+                        class="px-3 py-1.5 text-sm font-medium border border-gray-300 border-l-0 rounded-r-md focus:outline-none focus:ring-2 focus:ring-primary"
+                    >
+                        Select Tables
+                    </button>
+                </div>
+            </div>
+
+            <!-- Zoom Controls -->
+            <div class="flex items-center space-x-2">
+                <span class="text-sm font-medium text-gray-700">Zoom:</span>
+                <button
+                    @click="zoomOut()"
+                    :disabled="zoom <= 50"
+                    class="p-1.5 rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 12H4"></path>
+                    </svg>
+                </button>
+                <span class="text-sm font-medium text-gray-900 w-12 text-center" x-text="zoom + '%'"></span>
+                <button
+                    @click="zoomIn()"
+                    :disabled="zoom >= 200"
+                    class="p-1.5 rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
+                    </svg>
+                </button>
+            </div>
+
+            <!-- Navigation -->
+            <div class="flex items-center space-x-2">
+                <button
+                    @click="prevSpread()"
+                    :disabled="currentSpread <= 0"
+                    class="inline-flex items-center px-3 py-1.5 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                    <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path>
+                    </svg>
+                    Previous
+                </button>
+                <span class="text-sm text-gray-600" x-text="getSpreadLabel()"></span>
+                <button
+                    @click="nextSpread()"
+                    :disabled="!hasNextSpread()"
+                    class="inline-flex items-center px-3 py-1.5 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                    Next
+                    <svg class="w-4 h-4 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+                    </svg>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Loading Spinner -->
+    <div x-show="loading" class="flex items-center justify-center py-20">
+        <div class="text-center">
+            <svg class="animate-spin h-12 w-12 text-primary mx-auto mb-4" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+            <p class="text-gray-600">Loading PDF...</p>
+        </div>
+    </div>
+
+    <!-- Error Message -->
+    <div x-show="error" x-cloak class="rounded-md bg-red-50 p-4 mb-4">
+        <div class="flex">
+            <div class="flex-shrink-0">
+                <svg class="h-5 w-5 text-red-400" viewBox="0 0 20 20" fill="currentColor">
+                    <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd" />
+                </svg>
+            </div>
+            <div class="ml-3">
+                <h3 class="text-sm font-medium text-red-800">Failed to load PDF</h3>
+                <p class="mt-1 text-sm text-red-700" x-text="error"></p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Book Spread -->
+    <div x-show="!loading && !error" x-cloak class="bg-gray-200 rounded-lg p-4 mb-4">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4" :style="{ transform: 'scale(' + (zoom / 100) + ')', transformOrigin: 'top center' }">
+            <!-- Left Page -->
+            <div class="flex flex-col items-center">
+                <div
+                    id="left-page-container"
+                    class="page-container w-full rounded-lg overflow-hidden"
+                    :class="{ 'cursor-crosshair': mode === 'select' }"
+                    @mousedown="mode === 'select' && startSelection($event, 'left')"
+                    @mousemove="mode === 'select' && updateSelection($event)"
+                    @mouseup="mode === 'select' && endSelection($event)"
+                >
+                    <canvas id="left-page-canvas"></canvas>
+                    <template x-for="sel in getSelectionsForPage(leftPageNum)" :key="sel.id">
+                        <div
+                            class="selection-overlay"
+                            :class="sel.status"
+                            :style="getSelectionStyle(sel, 'left')"
+                        ></div>
+                    </template>
+                </div>
+                <p class="mt-2 text-sm text-gray-600" x-show="leftPageNum > 0">
+                    Page <span x-text="leftPageNum"></span>
+                </p>
+            </div>
+
+            <!-- Right Page -->
+            <div class="flex flex-col items-center">
+                <div
+                    id="right-page-container"
+                    class="page-container w-full rounded-lg overflow-hidden"
+                    :class="{ 'cursor-crosshair': mode === 'select' }"
+                    @mousedown="mode === 'select' && startSelection($event, 'right')"
+                    @mousemove="mode === 'select' && updateSelection($event)"
+                    @mouseup="mode === 'select' && endSelection($event)"
+                >
+                    <canvas id="right-page-canvas"></canvas>
+                    <template x-for="sel in getSelectionsForPage(rightPageNum)" :key="sel.id">
+                        <div
+                            class="selection-overlay"
+                            :class="sel.status"
+                            :style="getSelectionStyle(sel, 'right')"
+                        ></div>
+                    </template>
+                </div>
+                <p class="mt-2 text-sm text-gray-600" x-show="rightPageNum > 0 && rightPageNum <= totalPages">
+                    Page <span x-text="rightPageNum"></span>
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Selection Panel -->
+    <div x-show="!loading && !error" x-cloak class="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+        <div class="flex items-center justify-between mb-3">
+            <h3 class="text-lg font-medium text-gray-900">
+                Table Selections
+                <span class="ml-2 px-2 py-0.5 text-sm font-medium rounded-full bg-gray-100 text-gray-700" x-text="selections.length"></span>
+            </h3>
+            <div class="flex items-center space-x-2" x-show="selections.length > 0">
+                <span class="text-sm text-gray-500">
+                    <span x-text="selections.filter(s => s.status === 'approved').length"></span> approved
+                </span>
+            </div>
+        </div>
+
+        <div x-show="selections.length === 0" class="text-center py-6 text-gray-500">
+            <svg class="mx-auto h-10 w-10 text-gray-400 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"></path>
+            </svg>
+            <p>No table selections yet.</p>
+            <p class="text-sm mt-1">Switch to "Select Tables" mode and draw boxes around tables.</p>
+        </div>
+
+        <div x-show="selections.length > 0" class="space-y-2 max-h-48 overflow-y-auto">
+            <template x-for="sel in selections" :key="sel.id">
+                <div class="flex items-center justify-between p-2 rounded-md bg-gray-50 hover:bg-gray-100">
+                    <div class="flex items-center space-x-3">
+                        <span
+                            class="w-3 h-3 rounded-full"
+                            :class="{
+                                'bg-yellow-400': sel.status === 'pending',
+                                'bg-green-400': sel.status === 'approved',
+                                'bg-red-400': sel.status === 'rejected'
+                            }"
+                        ></span>
+                        <span class="text-sm text-gray-700">
+                            Page <span x-text="sel.page_num"></span>
+                        </span>
+                        <span class="text-xs text-gray-500" x-text="sel.source"></span>
+                    </div>
+                    <div class="flex items-center space-x-1">
+                        <button
+                            @click="goToPage(sel.page_num)"
+                            class="p-1 text-gray-400 hover:text-gray-600"
+                            title="Go to page"
+                        >
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path>
+                            </svg>
+                        </button>
+                        <button
+                            @click="deleteSelection(sel.id)"
+                            class="p-1 text-gray-400 hover:text-red-600"
+                            title="Delete selection"
+                        >
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+            </template>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script type="module">
+    import * as pdfjsLib from 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.4.168/build/pdf.min.mjs';
+
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.4.168/build/pdf.worker.min.mjs';
+
+    window.bookViewer = function() {
+        return {
+            // State
+            pdfDoc: null,
+            totalPages: 0,
+            currentSpread: 0,
+            leftPageNum: 0,
+            rightPageNum: 0,
+            zoom: 100,
+            mode: 'view',
+            loading: true,
+            error: null,
+            selections: [],
+            reportId: {{ report.id }},
+            pdfUrl: '{{ report.document.url }}',
+
+            // Selection drawing state
+            isDrawing: false,
+            drawingPage: null,
+            startX: 0,
+            startY: 0,
+            currentX: 0,
+            currentY: 0,
+
+            async init() {
+                try {
+                    this.pdfDoc = await pdfjsLib.getDocument(this.pdfUrl).promise;
+                    this.totalPages = this.pdfDoc.numPages;
+                    await this.loadSelections();
+                    await this.renderSpread();
+                    this.loading = false;
+                } catch (err) {
+                    console.error('Error loading PDF:', err);
+                    this.error = err.message || 'Unknown error occurred';
+                    this.loading = false;
+                }
+            },
+
+            async loadSelections() {
+                try {
+                    const response = await fetch(`/api/reports/${this.reportId}/selections/`, {
+                        headers: {
+                            'X-CSRFToken': document.querySelector('meta[name="csrf-token"]').content
+                        }
+                    });
+                    if (response.ok) {
+                        this.selections = await response.json();
+                    }
+                } catch (err) {
+                    console.error('Error loading selections:', err);
+                }
+            },
+
+            async renderSpread() {
+                this.leftPageNum = this.currentSpread * 2 + 1;
+                this.rightPageNum = this.currentSpread * 2 + 2;
+
+                await this.renderPage(this.leftPageNum, 'left-page-canvas');
+                if (this.rightPageNum <= this.totalPages) {
+                    await this.renderPage(this.rightPageNum, 'right-page-canvas');
+                } else {
+                    const canvas = document.getElementById('right-page-canvas');
+                    const ctx = canvas.getContext('2d');
+                    canvas.width = 0;
+                    canvas.height = 0;
+                }
+            },
+
+            async renderPage(pageNum, canvasId) {
+                if (pageNum < 1 || pageNum > this.totalPages) return;
+
+                try {
+                    const page = await this.pdfDoc.getPage(pageNum);
+                    const viewport = page.getViewport({ scale: 1.5 });
+                    const canvas = document.getElementById(canvasId);
+                    const ctx = canvas.getContext('2d');
+
+                    canvas.width = viewport.width;
+                    canvas.height = viewport.height;
+
+                    await page.render({
+                        canvasContext: ctx,
+                        viewport: viewport
+                    }).promise;
+                } catch (err) {
+                    console.error(`Error rendering page ${pageNum}:`, err);
+                }
+            },
+
+            prevSpread() {
+                if (this.currentSpread > 0) {
+                    this.currentSpread--;
+                    this.renderSpread();
+                }
+            },
+
+            nextSpread() {
+                if (this.hasNextSpread()) {
+                    this.currentSpread++;
+                    this.renderSpread();
+                }
+            },
+
+            hasNextSpread() {
+                return (this.currentSpread + 1) * 2 < this.totalPages;
+            },
+
+            getSpreadLabel() {
+                if (this.totalPages === 0) return '';
+                const left = this.leftPageNum;
+                const right = Math.min(this.rightPageNum, this.totalPages);
+                if (left === right) {
+                    return `Page ${left} of ${this.totalPages}`;
+                }
+                return `Pages ${left}-${right} of ${this.totalPages}`;
+            },
+
+            zoomIn() {
+                if (this.zoom < 200) {
+                    this.zoom += 25;
+                }
+            },
+
+            zoomOut() {
+                if (this.zoom > 50) {
+                    this.zoom -= 25;
+                }
+            },
+
+            goToPage(pageNum) {
+                this.currentSpread = Math.floor((pageNum - 1) / 2);
+                this.renderSpread();
+            },
+
+            getSelectionsForPage(pageNum) {
+                return this.selections.filter(s => s.page_num === pageNum);
+            },
+
+            getSelectionStyle(sel, side) {
+                const container = document.getElementById(`${side}-page-container`);
+                const canvas = document.getElementById(`${side}-page-canvas`);
+                if (!container || !canvas || canvas.width === 0) return { display: 'none' };
+
+                const scaleX = canvas.width / 100;
+                const scaleY = canvas.height / 100;
+
+                return {
+                    left: (sel.x1 * scaleX) + 'px',
+                    top: (sel.y1 * scaleY) + 'px',
+                    width: ((sel.x2 - sel.x1) * scaleX) + 'px',
+                    height: ((sel.y2 - sel.y1) * scaleY) + 'px'
+                };
+            },
+
+            startSelection(event, side) {
+                const container = event.target.closest('.page-container');
+                const canvas = container.querySelector('canvas');
+                if (!canvas || canvas.width === 0) return;
+
+                const rect = canvas.getBoundingClientRect();
+                this.isDrawing = true;
+                this.drawingPage = side;
+                this.startX = event.clientX - rect.left;
+                this.startY = event.clientY - rect.top;
+                this.currentX = this.startX;
+                this.currentY = this.startY;
+            },
+
+            updateSelection(event) {
+                if (!this.isDrawing) return;
+
+                const container = document.getElementById(`${this.drawingPage}-page-container`);
+                const canvas = container.querySelector('canvas');
+                const rect = canvas.getBoundingClientRect();
+
+                this.currentX = Math.max(0, Math.min(event.clientX - rect.left, canvas.width));
+                this.currentY = Math.max(0, Math.min(event.clientY - rect.top, canvas.height));
+            },
+
+            async endSelection(event) {
+                if (!this.isDrawing) return;
+                this.isDrawing = false;
+
+                const container = document.getElementById(`${this.drawingPage}-page-container`);
+                const canvas = container.querySelector('canvas');
+                if (!canvas) return;
+
+                const pageNum = this.drawingPage === 'left' ? this.leftPageNum : this.rightPageNum;
+                const x1 = Math.min(this.startX, this.currentX) / canvas.width * 100;
+                const y1 = Math.min(this.startY, this.currentY) / canvas.height * 100;
+                const x2 = Math.max(this.startX, this.currentX) / canvas.width * 100;
+                const y2 = Math.max(this.startY, this.currentY) / canvas.height * 100;
+
+                // Minimum size check
+                if (Math.abs(x2 - x1) < 2 || Math.abs(y2 - y1) < 2) {
+                    return;
+                }
+
+                await this.createSelection(pageNum, x1, y1, x2, y2);
+            },
+
+            async createSelection(pageNum, x1, y1, x2, y2) {
+                try {
+                    const response = await fetch(`/api/reports/${this.reportId}/selections/`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-CSRFToken': document.querySelector('meta[name="csrf-token"]').content
+                        },
+                        body: JSON.stringify({
+                            page_num: pageNum,
+                            x1: x1,
+                            y1: y1,
+                            x2: x2,
+                            y2: y2,
+                            source: 'manual'
+                        })
+                    });
+
+                    if (response.ok) {
+                        const newSelection = await response.json();
+                        this.selections.push(newSelection);
+                    }
+                } catch (err) {
+                    console.error('Error creating selection:', err);
+                }
+            },
+
+            async deleteSelection(selId) {
+                try {
+                    const response = await fetch(`/api/reports/${this.reportId}/selections/${selId}/`, {
+                        method: 'DELETE',
+                        headers: {
+                            'X-CSRFToken': document.querySelector('meta[name="csrf-token"]').content
+                        }
+                    });
+
+                    if (response.ok) {
+                        this.selections = this.selections.filter(s => s.id !== selId);
+                    }
+                } catch (err) {
+                    console.error('Error deleting selection:', err);
+                }
+            }
+        };
+    };
+</script>
+{% endblock %}
