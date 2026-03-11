@@ -211,7 +211,8 @@ class ExtractionScorer:
                 # Measure overlap (table words present in page)
                 overlap = len(table_words & page_words)
                 text_capture = overlap / len(page_words) if page_words else 0.0
-                # Combine cell fill and text capture
+                # Combine cell fill (more reliable) with text capture (scaled up
+                # since tables typically contain only a fraction of page text)
                 return 0.7 * cell_fill_ratio + 0.3 * min(text_capture * 2, 1.0)
 
         return cell_fill_ratio
@@ -264,7 +265,8 @@ class ExtractionScorer:
         else:
             row_consistency = 0.0
 
-        # Combine factors
+        # Combine factors: structure_score is binary (less granular), so weighted
+        # lower; row/col consistency are equally important continuous metrics
         regularity = (
             0.2 * structure_score +
             0.4 * col_consistency +
@@ -360,7 +362,8 @@ class ExtractionScorer:
 
         data_numeric_ratio = data_numeric_count / data_total if data_total > 0 else 0
 
-        # Headers typically have less numeric content
+        # Headers typically have less numeric content than data rows
+        # Scale by 2 to map typical 0-0.5 difference range to 0-1 score
         numeric_diff = data_numeric_ratio - first_row_numeric_ratio
         numeric_header_score = min(max(numeric_diff * 2, 0), 1.0)
 
@@ -374,14 +377,16 @@ class ExtractionScorer:
 
         data_avg_len = sum(data_cell_lengths) / len(data_cell_lengths) if data_cell_lengths else 0
 
-        # Headers often shorter than data cells
+        # Headers often shorter than data cells; ratio <1.5 is considered normal
+        # for header labels (beyond that, gradually penalize as less header-like)
         if data_avg_len > 0:
             len_ratio = first_row_avg_len / data_avg_len
             length_header_score = 1.0 if len_ratio < 1.5 else max(0, 1.0 - (len_ratio - 1.5) / 2)
         else:
             length_header_score = 0.5
 
-        # Combine heuristics
+        # Combine heuristics: numeric difference is weighted higher as it's a
+        # more reliable indicator of headers than cell length
         header_score = 0.6 * numeric_header_score + 0.4 * length_header_score
 
         return round(header_score, 4)
