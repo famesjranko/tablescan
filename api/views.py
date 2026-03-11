@@ -34,7 +34,7 @@ from django.conf import settings
 from .throttles import UploadRateThrottle, BurstRateThrottle
 
 from .serializers import *
-from .models import Extracted, Report
+from .models import Extracted, Report, TableSelection
 from api.scripts import table_extract
 from api.scripts.logging import Logging
 import fitz  # PyMuPDF
@@ -167,6 +167,101 @@ class ExtractedViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         return Extracted.objects.filter(report__owner=self.request.user)
+
+
+class TableSelectionViewSet(viewsets.ModelViewSet):
+    """
+    Nested viewset for TableSelection CRUD operations.
+
+    List selections for a report:       GET     api/reports/{id}/selections/
+    Filter by page:                     GET     api/reports/{id}/selections/?page_num=1
+    Filter by status:                   GET     api/reports/{id}/selections/?status=pending,approved
+    Create selection:                   POST    api/reports/{id}/selections/
+    Update selection status:            PATCH   api/reports/{id}/selections/{sel_id}/
+    Delete selection:                   DELETE  api/reports/{id}/selections/{sel_id}/
+    """
+
+    serializer_class = TableSelectionSerializer
+    permission_classes = [IsAuthenticated]
+    http_method_names = ['get', 'post', 'patch', 'delete', 'head', 'options']
+
+    def get_report(self):
+        """Get the parent report, ensuring ownership."""
+        report_pk = self.kwargs.get('report_pk')
+        try:
+            report = Report.objects.get(pk=report_pk, owner=self.request.user)
+        except Report.DoesNotExist:
+            from rest_framework.exceptions import NotFound
+            raise NotFound("Report not found.")
+        return report
+
+    def get_queryset(self):
+        """Return selections for the specific report with optional filtering."""
+        report = self.get_report()
+        queryset = TableSelection.objects.filter(report=report)
+
+        # Filter by page_num if provided
+        page_num = self.request.query_params.get('page_num')
+        if page_num:
+            try:
+                queryset = queryset.filter(page_num=int(page_num))
+            except ValueError:
+                pass
+
+        # Filter by status if provided (comma-separated)
+        status_param = self.request.query_params.get('status')
+        if status_param:
+            statuses = [s.strip() for s in status_param.split(',') if s.strip()]
+            if statuses:
+                queryset = queryset.filter(status__in=statuses)
+
+        return queryset
+
+    def get_object(self):
+        """Get selection ensuring it belongs to the report."""
+        report = self.get_report()
+        sel_id = self.kwargs.get('pk')
+        try:
+            selection = TableSelection.objects.get(pk=sel_id, report=report)
+        except TableSelection.DoesNotExist:
+            from rest_framework.exceptions import NotFound
+            raise NotFound("Selection not found.")
+        return selection
+
+    def get_serializer_context(self):
+        """Add report to serializer context for validation."""
+        context = super().get_serializer_context()
+        if 'report_pk' in self.kwargs:
+            context['report'] = self.get_report()
+        return context
+
+    def perform_create(self, serializer):
+        """Set report from URL when creating a selection."""
+        report = self.get_report()
+        serializer.save(report=report)
+
+    def partial_update(self, request, *args, **kwargs):
+        """PATCH: Only allow updating the status field."""
+        allowed_fields = {'status'}
+        request_fields = set(request.data.keys())
+        disallowed = request_fields - allowed_fields
+
+        if disallowed:
+            return Response(
+                {'error': f"Only 'status' field can be updated. Disallowed fields: {list(disallowed)}"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Validate status value
+        if 'status' in request.data:
+            valid_statuses = [choice[0] for choice in TableSelection.STATUS_CHOICES]
+            if request.data['status'] not in valid_statuses:
+                return Response(
+                    {'error': f"Invalid status. Must be one of: {valid_statuses}"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+        return super().partial_update(request, *args, **kwargs)
 
 
 class UploadView(APIView):
