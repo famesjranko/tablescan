@@ -671,7 +671,8 @@ def extract_tables_vision_readonly(file_path: str, page_number: int,
 
 def save_extraction_results(results: List[ExtractionResult], file_path: str,
                             page_num: int, report_db, extract_dir: dict,
-                            page_type: Optional[str] = None) -> list:
+                            page_type: Optional[str] = None,
+                            selection=None) -> list:
     """
     Save extraction results to disk and database.
 
@@ -773,6 +774,7 @@ def save_extraction_results(results: List[ExtractionResult], file_path: str,
                 confidence_score=confidence,
                 structure_json=structure,
                 bounding_box=bbox,
+                selection=selection,
             )
 
     log.output('INFO', f'[save-results] Page {page_num}: saved {len(results)} table(s)')

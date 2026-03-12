@@ -31,6 +31,7 @@ class ExtractedSerializer(serializers.HyperlinkedModelSerializer):
     class Meta:
         model = Extracted
         fields = (
+            "id",
             "report",
             "page_num",
             "table_num",
@@ -40,6 +41,7 @@ class ExtractedSerializer(serializers.HyperlinkedModelSerializer):
             "page_type",
             "extraction_method",
             "confidence_score",
+            "selection",
         )
 
 
@@ -52,6 +54,7 @@ class ExtractedSerializer2(serializers.HyperlinkedModelSerializer):
     class Meta:
         model = Extracted
         fields = (
+            "id",
             "page_num",
             "table_num",
             "f_type",
@@ -60,6 +63,7 @@ class ExtractedSerializer2(serializers.HyperlinkedModelSerializer):
             "page_type",
             "extraction_method",
             "confidence_score",
+            "selection",
         )
 
 

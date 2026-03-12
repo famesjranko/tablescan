@@ -3,6 +3,7 @@
 {% block title %}{{ report.name }} - PDF Table Extractor{% endblock %}
 
 {% block content %}
+{% csrf_token %}
 <div>
     <!-- Header -->
     <div class="mb-6">

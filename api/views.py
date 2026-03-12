@@ -187,6 +187,8 @@ class ExtractedViewSet(viewsets.ModelViewSet):
     Update part of extraction:      PATCH   api/extracted/{id}/
     Remove extraction by id:        DELETE  api/extracted/{id}/
     Remove extraction by name:      DELETE  api/extracted/?name=
+    Get extraction variants:        GET     api/extracted/{id}/variants/
+    Switch extraction method:       POST    api/extracted/{id}/switch-method/
     """
 
     queryset = Extracted.objects.all()
@@ -197,6 +199,169 @@ class ExtractedViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         return Extracted.objects.filter(report__owner=self.request.user)
+
+    @action(detail=True, methods=['get'])
+    def variants(self, request, pk=None):
+        """
+        Get all extraction variants for this table.
+
+        Returns cached extraction variants from all methods so the user
+        can compare and switch to a different extraction result.
+
+        GET /api/extracted/{id}/variants/
+        """
+        from django.core.cache import cache
+        from api.tasks import _cache_key_for_selection, _deserialize_variants_from_cache
+
+        extracted = self.get_object()
+
+        # Check if this extraction has a linked selection
+        if not extracted.selection_id:
+            return Response({
+                'variants': [],
+                'current_method': extracted.extraction_method,
+                'message': 'No variants available - extraction not from selection'
+            })
+
+        # Get cached variants
+        cache_key = _cache_key_for_selection(extracted.report_id, extracted.selection_id)
+        cached_data = cache.get(cache_key)
+
+        if not cached_data:
+            return Response({
+                'variants': [],
+                'current_method': extracted.extraction_method,
+                'cache_expired': True,
+                'message': 'Variants cache expired. Re-extract to see alternatives.'
+            })
+
+        # Deserialize and return variants (without dataframes)
+        variants = _deserialize_variants_from_cache(cached_data)
+
+        return Response({
+            'variants': [{
+                'method': v['method'],
+                'score': v.get('score', 0),
+                'confidence': v.get('confidence', 0),
+                'rows': v.get('rows', 0),
+                'cols': v.get('cols', 0),
+                'warnings': v.get('warnings', []),
+                'has_data': v.get('dataframe') is not None,
+                'error': v.get('error'),
+            } for v in variants],
+            'current_method': extracted.extraction_method,
+            'cache_expired': False,
+        })
+
+    @action(detail=True, methods=['post'], url_path='switch-method')
+    def switch_method(self, request, pk=None):
+        """
+        Switch to a different extraction method from cached results.
+
+        POST /api/extracted/{id}/switch-method/
+        Body: {"method": "pdfplumber_explicit"}
+
+        Updates the Extracted record with the chosen method's data
+        and rewrites the CSV/JSON/XLSX files.
+        """
+        from django.core.cache import cache
+        from api.tasks import _cache_key_for_selection, _deserialize_variants_from_cache
+        from api.scripts.YOLOV3.predict_table import save_extraction_results, build_structure_json
+        from api.scripts.extractors import ExtractionResult
+
+        extracted = self.get_object()
+        new_method = request.data.get('method')
+
+        if not new_method:
+            return Response(
+                {'error': 'method parameter is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if not extracted.selection_id:
+            return Response(
+                {'error': 'Cannot switch method - extraction not from selection'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Get cached variants
+        cache_key = _cache_key_for_selection(extracted.report_id, extracted.selection_id)
+        cached_data = cache.get(cache_key)
+
+        if not cached_data:
+            return Response(
+                {'error': 'Variants cache expired. Please re-extract to switch methods.'},
+                status=status.HTTP_410_GONE
+            )
+
+        variants = _deserialize_variants_from_cache(cached_data)
+
+        # Find the requested method
+        chosen = None
+        for v in variants:
+            if v['method'] == new_method and v.get('dataframe') is not None:
+                chosen = v
+                break
+
+        if not chosen:
+            available_methods = [v['method'] for v in variants if v.get('dataframe') is not None]
+            return Response(
+                {'error': f'Method not found or has no data. Available: {available_methods}'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Get file paths from current extraction
+        report = extracted.report
+        working_dir = Path(report.document.path).parent
+        extract_dir = {
+            "csv": working_dir / "csv",
+            "json": working_dir / "json",
+            "xlsx": working_dir / "xlsx",
+        }
+
+        # Delete old Extracted records for this selection
+        old_extractions = Extracted.objects.filter(
+            report=report,
+            selection_id=extracted.selection_id
+        )
+
+        # Delete old files
+        for old_ext in old_extractions:
+            if old_ext.file:
+                try:
+                    file_path = Path(settings.MEDIA_ROOT) / old_ext.file.name
+                    if file_path.exists():
+                        file_path.unlink()
+                except Exception:
+                    pass
+
+        old_extractions.delete()
+
+        # Create new ExtractionResult and save
+        new_result = ExtractionResult(
+            dataframe=chosen['dataframe'],
+            confidence=chosen.get('confidence', 0),
+            method=chosen['method'],
+            metadata=chosen.get('metadata', {})
+        )
+
+        save_extraction_results(
+            results=[new_result],
+            file_path=report.document.path,
+            page_num=extracted.page_num,
+            report_db=report,
+            extract_dir=extract_dir,
+            page_type=extracted.page_type,
+            selection=extracted.selection
+        )
+
+        return Response({
+            'status': 'ok',
+            'method': new_method,
+            'score': chosen.get('score', 0),
+            'rows': chosen.get('rows', 0),
+            'cols': chosen.get('cols', 0),
+        })
 
 
 class TableSelectionViewSet(viewsets.ModelViewSet):
@@ -452,6 +617,10 @@ class ReportDetailView(LoginRequiredMixin, DetailView):
         return Report.objects.filter(owner=self.request.user)
 
     def get_context_data(self, **kwargs):
+        import json as json_lib
+        from django.core.cache import cache
+        from api.tasks import _cache_key_for_selection, _deserialize_variants_from_cache
+
         context = super().get_context_data(**kwargs)
         report = self.object
 
@@ -470,12 +639,42 @@ class ReportDetailView(LoginRequiredMixin, DetailView):
                 table_num=csv_ext.table_num
             ).first()
 
+            # Get variants from cache if available
+            variants = []
+            variants_available = False
+            if csv_ext.selection_id:
+                cache_key = _cache_key_for_selection(report.id, csv_ext.selection_id)
+                cached_data = cache.get(cache_key)
+                if cached_data:
+                    try:
+                        all_variants = _deserialize_variants_from_cache(cached_data)
+                        # Only include variants with valid data
+                        variants = [{
+                            'method': v['method'],
+                            'score': round(v.get('score', 0), 3),
+                            'confidence': round(v.get('confidence', 0), 3),
+                            'rows': v.get('rows', 0),
+                            'cols': v.get('cols', 0),
+                            'warnings': v.get('warnings', []),
+                            'has_data': v.get('dataframe') is not None and v.get('rows', 0) > 0,
+                            'error': v.get('error'),
+                        } for v in all_variants]
+                        variants_available = True
+                    except Exception:
+                        pass
+
             table_data = {
                 'id': csv_ext.id,
                 'page_num': csv_ext.page_num,
                 'table_num': csv_ext.table_num,
                 'csv_file': csv_ext.file,
                 'json_file': json_ext.file if json_ext else None,
+                'extraction_method': csv_ext.extraction_method,
+                'confidence_score': csv_ext.confidence_score,
+                'selection_id': csv_ext.selection_id,
+                'variants': variants,
+                'variants_json': json_lib.dumps(variants),  # Pre-serialized for JS
+                'variants_available': variants_available,
             }
             tables.append(table_data)
             tables_by_page[csv_ext.page_num].append(table_data)
