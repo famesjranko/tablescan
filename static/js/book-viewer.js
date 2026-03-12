@@ -401,11 +401,17 @@ export function createBookViewer(config) {
             const scaleX = rect.width / 100;
             const scaleY = rect.height / 100;
 
+            // Clip coordinates to [0, 100] range to keep boxes within page boundaries
+            const x1 = Math.max(0, Math.min(100, sel.x1));
+            const y1 = Math.max(0, Math.min(100, sel.y1));
+            const x2 = Math.max(0, Math.min(100, sel.x2));
+            const y2 = Math.max(0, Math.min(100, sel.y2));
+
             return {
-                left: (sel.x1 * scaleX) + 'px',
-                top: (sel.y1 * scaleY) + 'px',
-                width: ((sel.x2 - sel.x1) * scaleX) + 'px',
-                height: ((sel.y2 - sel.y1) * scaleY) + 'px'
+                left: (x1 * scaleX) + 'px',
+                top: (y1 * scaleY) + 'px',
+                width: ((x2 - x1) * scaleX) + 'px',
+                height: ((y2 - y1) * scaleY) + 'px'
             };
         },
 

@@ -141,11 +141,12 @@ def norm_bbox(img, bbox, x_corr=0.02, y_corr=0.02):
     h_corr = h_img_norm * y_corr
 
     # Small symmetric margins - just enough for table borders
+    # Clip to valid range [0, 1.0] to keep boxes within page boundaries
     return [
-        x1_img_norm - w_corr,
-        y1_img_norm - h_corr,
-        x2_img_norm + w_corr,
-        y2_img_norm + h_corr,
+        max(0.0, min(1.0, x1_img_norm - w_corr)),
+        max(0.0, min(1.0, y1_img_norm - h_corr)),
+        max(0.0, min(1.0, x2_img_norm + w_corr)),
+        max(0.0, min(1.0, y2_img_norm + h_corr)),
     ]
 
 

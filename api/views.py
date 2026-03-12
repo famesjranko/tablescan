@@ -640,6 +640,16 @@ class UploadAsyncView(LoginRequiredMixin, View):
         report.name = base_dir
         report.f_type = file_name.split('.')[1]
         report.extraction_mode = extraction_mode
+
+        # Get total page count for proper multi-page handling
+        try:
+            pdf_doc = fitz.open(file_path)
+            report.total_pages = len(pdf_doc)
+            pdf_doc.close()
+        except Exception:
+            # If we can't read pages, default to 1 (will be corrected during extraction)
+            report.total_pages = 1
+
         report.save()
 
         # Clean empty directories

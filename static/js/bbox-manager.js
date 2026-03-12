@@ -309,10 +309,22 @@ export class BoundingBoxManager {
         const topLeft = this.pdfToCanvas(selection.x1, selection.y1, pdfCanvas);
         const bottomRight = this.pdfToCanvas(selection.x2, selection.y2, pdfCanvas);
 
-        const x = Math.min(topLeft.x, bottomRight.x);
-        const y = Math.min(topLeft.y, bottomRight.y);
-        const width = Math.abs(bottomRight.x - topLeft.x);
-        const height = Math.abs(bottomRight.y - topLeft.y);
+        // Clip coordinates to canvas bounds
+        const canvasWidth = pdfCanvas.width;
+        const canvasHeight = pdfCanvas.height;
+        const clippedTopLeft = {
+            x: Math.max(0, Math.min(canvasWidth, topLeft.x)),
+            y: Math.max(0, Math.min(canvasHeight, topLeft.y))
+        };
+        const clippedBottomRight = {
+            x: Math.max(0, Math.min(canvasWidth, bottomRight.x)),
+            y: Math.max(0, Math.min(canvasHeight, bottomRight.y))
+        };
+
+        const x = Math.min(clippedTopLeft.x, clippedBottomRight.x);
+        const y = Math.min(clippedTopLeft.y, clippedBottomRight.y);
+        const width = Math.abs(clippedBottomRight.x - clippedTopLeft.x);
+        const height = Math.abs(clippedBottomRight.y - clippedTopLeft.y);
 
         const color = this.getBoxColor(selection);
 
