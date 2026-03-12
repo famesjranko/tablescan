@@ -187,6 +187,17 @@ def multipage_table_pdf():
 
 
 @pytest.fixture
+def multipage_table_areas():
+    """
+    Return table_areas for multipage_table_pdf in PDF coordinates (bottom-left origin).
+
+    Page 1: Table at (100, 200) in top-left, 200x50 pixels (2 cols × 2 rows).
+    PDF coords: (100, 542, 300, 592)
+    """
+    return [(100.0, 542.0, 300.0, 592.0)]
+
+
+@pytest.fixture
 def sample_extraction_result():
     """Create a sample ExtractionResult for testing."""
     df = pd.DataFrame({
@@ -911,12 +922,12 @@ class TestMultipageExtraction:
         # Page 2 has only text - should find no tables
         assert len(page2_results) == 0, "Should find no tables on page 2"
 
-    def test_pdfplumber_extracts_tables_from_correct_pages(self, multipage_table_pdf):
+    def test_pdfplumber_extracts_tables_from_correct_pages(self, multipage_table_pdf, multipage_table_areas):
         """Pdfplumber should find tables on page 1 and no tables on page 2."""
         extractor = PdfplumberExtractor()
 
-        page1_results = extractor.extract(multipage_table_pdf, 1)
-        page2_results = extractor.extract(multipage_table_pdf, 2)
+        page1_results = extractor.extract(multipage_table_pdf, 1, table_areas=multipage_table_areas)
+        page2_results = extractor.extract(multipage_table_pdf, 2)  # No table_areas for page without tables
 
         # Page 1 has a bordered table - should find it
         assert len(page1_results) >= 1, "Should find at least one table on page 1"
