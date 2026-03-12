@@ -329,9 +329,16 @@ export function createBookViewer(config) {
 
         /**
          * Select a table - highlight it and navigate only if needed
+         * Clicking the same table again will deselect it
          */
         selectTable(sel) {
-            // Always highlight the selection
+            // Toggle selection if clicking the same table
+            if (this.hoveredSelectionId === sel.id) {
+                this.hoveredSelectionId = null;
+                return;
+            }
+
+            // Highlight the selection
             this.hoveredSelectionId = sel.id;
 
             // Only navigate if the page isn't already visible
@@ -695,6 +702,14 @@ export function createBookViewer(config) {
          */
         async rejectSelection(selId) {
             await this.updateSelectionStatus(selId, 'rejected');
+        },
+
+        /**
+         * Reset a selection back to pending status (undo approve/reject)
+         * @param {number} selId - Selection ID
+         */
+        async resetSelection(selId) {
+            await this.updateSelectionStatus(selId, 'pending');
         },
 
         /**

@@ -153,6 +153,10 @@
         background: #EF4444;
         color: white;
     }
+    .review-controls .undo-btn {
+        background: #F59E0B;
+        color: white;
+    }
     /* Selection index badge on PDF overlay - notched corner style */
     .selection-index {
         position: absolute;
@@ -419,6 +423,18 @@
                                     </svg>
                                 </button>
                             </div>
+                            <!-- Undo control for approved/rejected boxes -->
+                            <div x-show="sel.status === 'approved' || sel.status === 'rejected'" class="review-controls">
+                                <button
+                                    class="undo-btn"
+                                    @click.stop="resetSelection(sel.id)"
+                                    title="Undo - return to pending"
+                                >
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h10a5 5 0 015 5v2M3 10l4-4M3 10l4 4"></path>
+                                    </svg>
+                                </button>
+                            </div>
                         </div>
                     </template>
                     <!-- Drawing preview -->
@@ -474,6 +490,18 @@
                                 >
                                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                                    </svg>
+                                </button>
+                            </div>
+                            <!-- Undo control for approved/rejected boxes -->
+                            <div x-show="sel.status === 'approved' || sel.status === 'rejected'" class="review-controls">
+                                <button
+                                    class="undo-btn"
+                                    @click.stop="resetSelection(sel.id)"
+                                    title="Undo - return to pending"
+                                >
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h10a5 5 0 015 5v2M3 10l4-4M3 10l4 4"></path>
                                     </svg>
                                 </button>
                             </div>
@@ -671,6 +699,18 @@
                             >
                                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                                </svg>
+                            </button>
+                        </template>
+                        <!-- Undo button for approved/rejected selections -->
+                        <template x-if="sel.status === 'approved' || sel.status === 'rejected'">
+                            <button
+                                @click="resetSelection(sel.id)"
+                                class="p-1 text-yellow-500 hover:text-yellow-600"
+                                title="Undo - return to pending"
+                            >
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h10a5 5 0 015 5v2M3 10l4-4M3 10l4 4"></path>
                                 </svg>
                             </button>
                         </template>
