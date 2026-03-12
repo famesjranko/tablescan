@@ -169,6 +169,75 @@ class ExtractionScorer:
         scored.sort(key=lambda x: x[1], reverse=True)
         return scored
 
+    def generate_warnings(
+        self,
+        result: ExtractionResult,
+        page_text: Optional[str] = None
+    ) -> List[str]:
+        """
+        Generate human-readable warnings for extraction quality issues.
+
+        Analyzes the extraction result and returns a list of warnings
+        for quality issues that users should be aware of.
+
+        Args:
+            result: ExtractionResult to analyze.
+            page_text: Optional full page text for coverage comparison.
+
+        Returns:
+            List of warning strings. Empty list if no issues.
+        """
+        warnings = []
+        df = result.dataframe
+
+        if df.empty:
+            return ["Empty table - no data extracted"]
+
+        # Check cell coverage
+        coverage = self._score_coverage(df, page_text)
+        if coverage < 0.5:
+            warnings.append(f"Low cell coverage ({int(coverage * 100)}%)")
+        elif coverage < 0.7:
+            warnings.append(f"Moderate cell coverage ({int(coverage * 100)}%)")
+
+        # Check structure regularity
+        regularity = self._score_regularity(df)
+        if regularity < 0.5:
+            warnings.append("Irregular row structure")
+        elif regularity < 0.7:
+            warnings.append("Some row structure inconsistency")
+
+        # Check numeric integrity
+        numeric_score = self._score_numeric_integrity(df)
+        if numeric_score < 0.6:
+            warnings.append("Numeric parsing issues detected")
+        elif numeric_score < 0.8:
+            warnings.append("Some numeric values may be incorrectly parsed")
+
+        # Check header detection
+        header_score = self._score_header_detection(df, result.metadata)
+        if header_score < 0.4:
+            warnings.append("Header row may not be correctly identified")
+
+        # Check table dimensions
+        rows, cols = df.shape
+        if rows < 3:
+            warnings.append(f"Only {rows} rows extracted")
+        if cols < 2:
+            warnings.append(f"Only {cols} column(s) extracted")
+
+        # Check if many cells are empty
+        total_cells = df.size
+        non_empty = sum(
+            (df[col].astype(str).str.strip() != '').sum()
+            for col in df.columns
+        )
+        empty_ratio = 1 - (non_empty / total_cells) if total_cells > 0 else 1
+        if empty_ratio > 0.5:
+            warnings.append(f"Many empty cells ({int(empty_ratio * 100)}%)")
+
+        return warnings
+
     def _score_coverage(
         self,
         df: pd.DataFrame,

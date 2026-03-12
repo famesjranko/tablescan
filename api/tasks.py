@@ -4,19 +4,54 @@ tasks.py
 """
 
 from collections import defaultdict
+import json
 
 import fitz
+import pandas as pd
 from celery import shared_task
 from django.conf import settings
+from django.core.cache import cache
 from pathlib import Path, PurePath
 
 from api.scripts import table_extract
 from api.scripts.logging import Logging
 from api.scripts.YOLOV3.predict_table import detect_table_regions, save_extraction_results, extract_from_manual_areas
-from api.models import Report, TableSelection
+from api.scripts.extractors import MultiExtractor, ExtractionResult
+from api.models import Report, TableSelection, Extracted
 
 from timeit import default_timer as timer
 from humanfriendly import format_timespan
+
+
+def _cache_key_for_selection(report_id: int, selection_id: int) -> str:
+    """Generate cache key for extraction variants."""
+    return f"extraction_variants:{report_id}:{selection_id}"
+
+
+def _serialize_variants_for_cache(variants: list) -> str:
+    """Serialize extraction variants for cache using JSON."""
+    serializable = []
+    for v in variants:
+        v_copy = v.copy()
+        if v_copy.get('dataframe') is not None:
+            # Convert DataFrame to JSON-serializable format
+            v_copy['dataframe_json'] = v_copy['dataframe'].to_json(orient='split')
+        v_copy.pop('dataframe', None)
+        serializable.append(v_copy)
+    return json.dumps(serializable)
+
+
+def _deserialize_variants_from_cache(data: str) -> list:
+    """Deserialize extraction variants from cache."""
+    from io import StringIO
+    variants = json.loads(data)
+    for v in variants:
+        if 'dataframe_json' in v:
+            v['dataframe'] = pd.read_json(StringIO(v['dataframe_json']), orient='split')
+            del v['dataframe_json']
+        else:
+            v['dataframe'] = None
+    return variants
 
 
 @shared_task(bind=True)
@@ -366,56 +401,90 @@ def extract_from_selections(self, report_id):
         for sel in approved_selections:
             selection_ids_by_page[sel.page_num].append(sel.id)
 
-        # Process each page with its table_areas
-        for i, page_num in enumerate(pages_to_process):
-            progress = 10 + int(80 * (i / total_pages))
+        # Initialize multi-extractor for running all methods
+        multi_extractor = MultiExtractor()
+        cache_ttl = getattr(settings, 'EXTRACTION_VARIANTS_CACHE_TTL', 600)
+
+        # Process each selection individually (not grouped by page)
+        # This allows per-selection caching and method switching
+        all_selections = list(approved_selections)
+        total_selections = len(all_selections)
+
+        for i, selection in enumerate(all_selections):
+            page_num = selection.page_num
+            progress = 10 + int(80 * (i / total_selections))
             self.update_state(state='PROGRESS', meta={
                 'current': progress,
                 'total': 100,
-                'status': f'Extracting tables from page {page_num}...'
+                'status': f'Extracting table from page {page_num} (selection {i + 1}/{total_selections})...'
             })
 
-            table_areas = selections_by_page[page_num]
-            log.output("INFO", f"[Task {self.request.id}] Page {page_num}: extracting {len(table_areas)} table region(s)")
+            # Get the table area for this selection
+            with fitz.open(file_path) as pdf_doc:
+                page = pdf_doc[page_num - 1]
+                page_width = page.rect.width
+                page_height = page.rect.height
+
+                pdf_x1 = (selection.x1 / 100) * page_width
+                pdf_x2 = (selection.x2 / 100) * page_width
+                pdf_y1 = (1 - selection.y1 / 100) * page_height
+                pdf_y2 = (1 - selection.y2 / 100) * page_height
+                table_area = (pdf_x1, pdf_y1, pdf_x2, pdf_y2)
+
+            log.output("INFO", f"[Task {self.request.id}] Selection {selection.id}: extracting with all methods")
 
             try:
-                # Extract using same logic as auto mode (tries both flavors, picks best)
-                results = extract_from_manual_areas(
+                # Run ALL extractors and get scored results
+                all_variants = multi_extractor.extract_all_with_scores(
                     pdf_path=file_path,
                     page_num=page_num,
-                    table_areas=table_areas,
-                    flavor='auto',
-                    merge_headers=True
+                    table_areas=[table_area]
                 )
 
-                if results:
-                    # Save results to disk and database
+                # Filter out failed/empty results for display but keep them in cache
+                valid_variants = [v for v in all_variants if v.get('dataframe') is not None and v.get('rows', 0) > 0]
+
+                if valid_variants:
+                    # Cache ALL variants (including failed ones for transparency)
+                    cache_key = _cache_key_for_selection(report.id, selection.id)
+                    cache.set(cache_key, _serialize_variants_for_cache(all_variants), timeout=cache_ttl)
+                    log.output("INFO", f"[Task {self.request.id}] Cached {len(all_variants)} variants for selection {selection.id}")
+
+                    # Get the best result (highest score)
+                    best_variant = valid_variants[0]
+
+                    # Create ExtractionResult for saving
+                    best_result = ExtractionResult(
+                        dataframe=best_variant['dataframe'],
+                        confidence=best_variant['confidence'],
+                        method=best_variant['method'],
+                        metadata=best_variant.get('metadata', {})
+                    )
+
+                    # Save the best result to disk and database
                     save_extraction_results(
-                        results=results,
+                        results=[best_result],
                         file_path=file_path,
                         page_num=page_num,
                         report_db=report,
                         extract_dir=extract_dir,
-                        page_type='born_digital'  # Default for selection-based extraction
+                        page_type='born_digital',
+                        selection=selection
                     )
-                    total_tables_extracted += len(results)
-                    log.output("INFO", f"[Task {self.request.id}] Page {page_num}: saved {len(results)} table(s)")
+                    total_tables_extracted += 1
+                    log.output("INFO", f"[Task {self.request.id}] Selection {selection.id}: saved best result ({best_variant['method']}, score={best_variant['score']:.3f})")
                 else:
-                    # No tables extracted - mark selections as failed
-                    log.output("WARNING", f"[Task {self.request.id}] Page {page_num}: no tables extracted from {len(table_areas)} region(s)")
+                    # No valid results from any extractor
+                    log.output("WARNING", f"[Task {self.request.id}] Selection {selection.id}: no tables extracted from any method")
                     failed_pages.append(page_num)
-                    TableSelection.objects.filter(
-                        id__in=selection_ids_by_page[page_num]
-                    ).update(status='failed')
+                    selection.status = 'failed'
+                    selection.save(update_fields=['status'])
 
-            except Exception as page_error:
-                log.output("WARNING", f"[Task {self.request.id}] Page {page_num} extraction failed: {str(page_error)}")
+            except Exception as sel_error:
+                log.output("WARNING", f"[Task {self.request.id}] Selection {selection.id} extraction failed: {str(sel_error)}")
                 failed_pages.append(page_num)
-                # Mark selections for this page as failed
-                TableSelection.objects.filter(
-                    id__in=selection_ids_by_page[page_num]
-                ).update(status='failed')
-                # Continue with other pages
+                selection.status = 'failed'
+                selection.save(update_fields=['status'])
 
         # Update status to completed
         report.extraction_status = 'completed'

@@ -8,9 +8,12 @@ vision_extractor.py
 
 import logging
 import os
+import tempfile
 from typing import List, Optional
 
 import pandas as pd
+from pdf2image import convert_from_path
+from PIL import Image
 
 from .base import BaseExtractor, ExtractionResult
 
@@ -95,78 +98,149 @@ class VisionExtractor(BaseExtractor):
         results = []
 
         try:
-            # Initialize PDF document with img2table
-            # pages parameter is 0-indexed in img2table
-            doc = PDF(pdf_path, pages=[page_num - 1])
+            # table_areas is required - we always extract from specific regions
+            if not table_areas:
+                logger.warning(f"[{self.name}] No table_areas provided - pipeline error, skipping")
+                return []
 
             # Initialize OCR (Tesseract for CPU-based extraction)
-            # OCR is optional - can be None if only detection is needed
             ocr = None
             try:
                 ocr = TesseractOCR(n_threads=1, lang="eng")
             except Exception:
                 # Tesseract not available, continue without OCR
-                # img2table can still detect tables, just won't extract text
                 pass
 
-            # Extract tables
-            extracted_tables = doc.extract_tables(
-                ocr=ocr,
-                implicit_rows=self._implicit_rows,
-                borderless_tables=self._borderless_tables,
-                min_confidence=int(self._min_confidence * 100)  # img2table uses 0-100
+            # Extract from specific regions by cropping images
+            results = self._extract_from_regions(
+                pdf_path, page_num, table_areas, ocr
             )
-
-            # Get tables for the requested page (0-indexed in result)
-            page_tables = extracted_tables.get(page_num - 1, [])
-
-            for i, table in enumerate(page_tables):
-                # Filter by table_areas if provided
-                if table_areas and not self._table_in_areas(table, table_areas):
-                    continue
-
-                result = self._process_table(table, i, page_num)
-                if result:
-                    results.append(result)
 
         except ValueError:
             # Re-raise ValueError for page out of range
             raise
         except Exception as e:
             # Return empty list for other extraction failures
-            # Log at DEBUG level for troubleshooting (MultiExtractor logs at INFO/WARNING)
-            logger.debug(f"[VisionExtractor] Extraction failed for {pdf_path} page {page_num}: {e}")
+            logger.warning(f"[img2table] Extraction failed for page {page_num}: {e}")
             return []
 
         return results
 
-    def _table_in_areas(self, table, areas: List[tuple]) -> bool:
+    def _extract_from_regions(
+        self,
+        pdf_path: str,
+        page_num: int,
+        table_areas: List[tuple],
+        ocr
+    ) -> List[ExtractionResult]:
         """
-        Check if table overlaps with any of the specified areas.
+        Extract tables from specific regions by cropping the page image.
+
+        Converts PDF page to image, crops to each region, and runs
+        img2table on the cropped images for more accurate extraction.
 
         Args:
-            table: img2table ExtractedTable object.
-            areas: List of bounding boxes [(x1, y1, x2, y2), ...].
+            pdf_path: Path to PDF file.
+            page_num: Page number (1-indexed).
+            table_areas: List of bounding boxes in PDF coords [(x1, y1, x2, y2), ...].
+            ocr: TesseractOCR instance or None.
 
         Returns:
-            True if table overlaps with any area, False otherwise.
+            List of ExtractionResult from all regions.
         """
-        try:
-            # Get table bounding box
-            bbox = table.bbox
-            if not bbox:
-                return True  # If no bbox, include table
+        from img2table.document import Image as Img2TableImage
 
-            tx1, ty1, tx2, ty2 = bbox.x1, bbox.y1, bbox.x2, bbox.y2
+        results = []
 
-            for (ax1, ay1, ax2, ay2) in areas:
-                # Check for overlap
-                if not (tx2 < ax1 or tx1 > ax2 or ty2 < ay1 or ty1 > ay2):
-                    return True
-            return False
-        except Exception:
-            # On error, include the table
-            return True
+        # Convert PDF page to image (300 DPI for good quality)
+        images = convert_from_path(
+            pdf_path,
+            first_page=page_num,
+            last_page=page_num,
+            dpi=300
+        )
+
+        if not images:
+            return results
+
+        page_image = images[0]
+        img_width, img_height = page_image.size
+
+        # Get PDF page dimensions for coordinate conversion
+        # PDF coordinates: origin bottom-left, units in points (1/72 inch)
+        # Image coordinates: origin top-left, units in pixels
+        import fitz
+        with fitz.open(pdf_path) as pdf_doc:
+            pdf_page = pdf_doc[page_num - 1]
+            pdf_width = pdf_page.rect.width
+            pdf_height = pdf_page.rect.height
+
+        # Scale factors
+        scale_x = img_width / pdf_width
+        scale_y = img_height / pdf_height
+
+        for i, (x1, y1, x2, y2) in enumerate(table_areas):
+            try:
+                # Convert PDF coords to image pixels
+                # PDF: y1 is top (higher value), y2 is bottom (lower value)
+                # Image: y=0 is top, y increases downward
+                img_x1 = int(x1 * scale_x)
+                img_x2 = int(x2 * scale_x)
+                # Flip Y: PDF y1 (top) -> image top, PDF y2 (bottom) -> image bottom
+                img_y1 = int((pdf_height - y1) * scale_y)  # PDF top -> image top
+                img_y2 = int((pdf_height - y2) * scale_y)  # PDF bottom -> image bottom
+
+                # Ensure correct ordering (img_y1 should be smaller for PIL crop)
+                if img_y1 > img_y2:
+                    img_y1, img_y2 = img_y2, img_y1
+
+                # Add small padding (5 pixels) to avoid cutting off edges
+                padding = 5
+                img_x1 = max(0, img_x1 - padding)
+                img_y1 = max(0, img_y1 - padding)
+                img_x2 = min(img_width, img_x2 + padding)
+                img_y2 = min(img_height, img_y2 + padding)
+
+                # Crop image to region
+                cropped = page_image.crop((img_x1, img_y1, img_x2, img_y2))
+
+                # Save cropped image temporarily and run img2table
+                with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
+                    cropped.save(tmp.name, 'PNG')
+                    tmp_path = tmp.name
+
+                try:
+                    doc = Img2TableImage(tmp_path)
+                    extracted_tables = doc.extract_tables(
+                        ocr=ocr,
+                        implicit_rows=self._implicit_rows,
+                        borderless_tables=self._borderless_tables,
+                        min_confidence=int(self._min_confidence * 100)
+                    )
+
+                    # img2table.Image returns list directly, not dict
+                    for j, table in enumerate(extracted_tables):
+                        result = self._process_table(table, i * 100 + j, page_num)
+                        if result:
+                            # Update bbox to reflect original PDF coordinates
+                            if result.metadata.get('bounding_box'):
+                                result.metadata['bounding_box'] = {
+                                    'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2
+                                }
+                            results.append(result)
+
+                finally:
+                    # Clean up temp file
+                    try:
+                        os.unlink(tmp_path)
+                    except Exception:
+                        pass
+
+            except Exception as e:
+                logger.warning(f"[img2table] Region {i} extraction failed: {e}")
+                continue
+
+        return results
 
     def _process_table(
         self,

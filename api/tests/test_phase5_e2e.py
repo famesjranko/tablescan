@@ -2285,7 +2285,8 @@ class TestPartialExtractionSuccess:
         source = inspect.getsource(extract_from_selections)
 
         # Verify selections are updated to failed status
-        assert ".update(status='failed')" in source
+        # Can be either queryset .update() or single instance .status = 'failed'
+        assert ".update(status='failed')" in source or "status = 'failed'" in source
 
     def test_partial_success_modal_in_template(self):
         """

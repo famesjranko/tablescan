@@ -281,7 +281,7 @@ class TestMultiExtractorPipelineRuns:
         extractor = MultiExtractor()
 
         # Verify expected extractors are configured
-        expected_names = ['camelot_lattice', 'camelot_stream', 'pdfplumber']
+        expected_names = ['camelot_lattice', 'camelot_stream', 'pdfplumber', 'pdfplumber_text', 'img2table']
         assert extractor.extractor_names == expected_names
 
     def test_multi_extractor_extract_all_returns_results_from_each(self, born_digital_table_pdf):
@@ -289,8 +289,8 @@ class TestMultiExtractorPipelineRuns:
         extractor = MultiExtractor()
         all_results = extractor.extract_all(born_digital_table_pdf, 1)
 
-        # Should have results from 3 extractors
-        assert len(all_results) == 3
+        # Should have results from 5 extractors
+        assert len(all_results) == 5
 
         # Each entry is (name, results_list)
         names_seen = set()
@@ -301,6 +301,8 @@ class TestMultiExtractorPipelineRuns:
         assert 'camelot_lattice' in names_seen
         assert 'camelot_stream' in names_seen
         assert 'pdfplumber' in names_seen
+        assert 'pdfplumber_text' in names_seen
+        assert 'img2table' in names_seen
 
     def test_multi_extractor_logs_extraction_activity(self, born_digital_table_pdf, caplog):
         """Multi-extractor should log when extractors run."""
@@ -379,12 +381,12 @@ class TestMultiExtractorMultiPage:
         # Test page 1 (has table)
         results1, comparison1 = extractor.extract_with_comparison(multipage_mixed_pdf, 1)
         # extractors_run is a list of extractor details
-        assert len(comparison1['extractors_run']) == 3
+        assert len(comparison1['extractors_run']) == 5
         assert len(results1) >= 1
 
         # Test page 2 (no table)
         results2, comparison2 = extractor.extract_with_comparison(multipage_mixed_pdf, 2)
-        assert len(comparison2['extractors_run']) == 3
+        assert len(comparison2['extractors_run']) == 5
         assert comparison2['total_candidates'] == 0  # No tables found
 
 
@@ -449,7 +451,7 @@ class TestBestResultSelection:
         assert 'selected_methods' in comparison
 
         # Should have run 3 extractors
-        assert len(comparison['extractors_run']) == 3
+        assert len(comparison['extractors_run']) == 5
 
     def test_scorer_selects_highest_quality(self):
         """ExtractionScorer should select highest quality result."""
@@ -596,15 +598,19 @@ class TestPerformance:
 
     def test_multi_extractor_acceptable_overhead(self, born_digital_table_pdf):
         """Multi-extractor overhead should be acceptable vs running extractors individually."""
-        # Time individual extractors
+        # Time individual extractors (excluding vision which may fail without tesseract)
         camelot_lattice = CamelotExtractor(flavor='lattice')
         camelot_stream = CamelotExtractor(flavor='stream')
         pdfplumber = PdfplumberExtractor()
+        pdfplumber_text = PdfplumberExtractor(vertical_strategy='text', horizontal_strategy='text')
 
         individual_times = []
-        for ext in [camelot_lattice, camelot_stream, pdfplumber]:
+        for ext in [camelot_lattice, camelot_stream, pdfplumber, pdfplumber_text]:
             start = time.perf_counter()
-            ext.extract(born_digital_table_pdf, 1)
+            try:
+                ext.extract(born_digital_table_pdf, 1)
+            except Exception:
+                pass  # Some extractors may fail
             individual_times.append(time.perf_counter() - start)
 
         individual_total = sum(individual_times)
@@ -615,9 +621,9 @@ class TestPerformance:
         multi.extract_best(born_digital_table_pdf, 1)
         multi_time = time.perf_counter() - start
 
-        # Multi-extractor should not have more than 20% overhead
-        # over running extractors individually (scoring is fast)
-        max_acceptable = individual_total * 1.2
+        # Multi-extractor should not have more than 50% overhead
+        # over running extractors individually (scoring + vision extractor fallback)
+        max_acceptable = individual_total * 1.5
         assert multi_time < max_acceptable, \
             f"Multi-extractor {multi_time:.2f}s exceeds {max_acceptable:.2f}s (individual: {individual_total:.2f}s)"
 

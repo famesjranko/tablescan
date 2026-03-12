@@ -39,7 +39,6 @@ import os
 import shutil
 import pandas as pd
 import json
-import filecmp
 import multiprocessing as mp
 
 from typing import Any, Callable, Dict, List, Optional
@@ -708,50 +707,6 @@ def extract(file_path: str, start_page: int, end_page: int,
     # get working dir
     full_working_dir = Path(file_path).parent
 
-    # set file instance check variables
-    base_file_name = os.path.splitext(file_name)[0]
-    original_file_name = base_file_name.replace("_!added!", "") + ".pdf"
-    original_file_path = PurePath(full_working_dir, original_file_name)
-
-    # test if uploaded file is the same as any file that exists which conforms to
-    # a file of the same name minus random characters that django adds when file
-    # with same name is uploaded twice.
-    if Path(original_file_path).exists():
-        file_is_same = filecmp.cmp(file_path, original_file_path, shallow=False)
-    else:
-        file_is_same = False
-
-    # if uploaded file matches a pre-existing file, but has different name created
-    # by django (django adds characters to duplicate files eg. '_!added!') then
-    # delete the first upload's database instance, incl all extractions, and replace
-    # with this upload - change this instance to match original and update.
-    if file_is_same and (original_file_name != file_name):
-        log.output("WARNING", "database object already exists!")
-
-        # get report database for previous upload of this file, get document.name and delete
-        try:
-            original_report_db = Report.objects.get(document__endswith=original_file_name)
-            original_name = original_report_db.document.name
-            original_report_db.delete()
-
-            # rename file path for first upload version
-            Path(report_db.document.path).rename(original_file_path)
-
-            # change the document name to first upload's version
-            report_db.document.name = original_name
-
-            # update report with changes
-            report_db.save()
-
-            # change extraction path to first upload path
-            file_path = original_file_path
-
-            log.output("INFO", f"updated database object: {report_db.name}")
-        except Report.DoesNotExist:
-            # File exists on disk but no database record - just delete the orphan file
-            log.output("WARNING", "orphan file found on disk with no database record, removing")
-            Path(original_file_path).unlink(missing_ok=True)
-
     # get total number of pages for pdf
     total_pages = get_num_pages(file_path)
 
@@ -882,7 +837,7 @@ def extract(file_path: str, start_page: int, end_page: int,
     # loop through extraction directories:
     for key, value in extract_dir.items():
         if key == "csv":
-            zip_name = original_file_name.replace(".pdf", "-CSV")
+            zip_name = file_name.replace(".pdf", "-CSV")
             zip_path = PurePath(full_working_dir, zip_name)
 
             # create zip of csv extraction directory

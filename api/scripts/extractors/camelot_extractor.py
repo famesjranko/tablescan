@@ -114,13 +114,16 @@ class CamelotExtractor(BaseExtractor):
         if self._strip_text:
             kwargs['strip_text'] = self._strip_text
 
-        # Convert table_areas to Camelot format if provided
-        if table_areas:
-            # Camelot expects comma-separated strings: ["x1,y1,x2,y2", ...]
-            camelot_areas = [
-                f"{x1},{y1},{x2},{y2}" for (x1, y1, x2, y2) in table_areas
-            ]
-            kwargs['table_areas'] = camelot_areas
+        # table_areas is required - we always extract from specific regions
+        if not table_areas:
+            logger.warning(f"[{self.name}] No table_areas provided - pipeline error, skipping")
+            return []
+
+        # Camelot expects comma-separated strings: ["x1,y1,x2,y2", ...]
+        camelot_areas = [
+            f"{x1},{y1},{x2},{y2}" for (x1, y1, x2, y2) in table_areas
+        ]
+        kwargs['table_areas'] = camelot_areas
 
         # Run Camelot extraction
         try:
@@ -130,8 +133,7 @@ class CamelotExtractor(BaseExtractor):
             if "page" in str(e).lower() and "out" in str(e).lower():
                 raise ValueError(f"Page {page_num} is out of range for {pdf_path}")
             # Return empty list for extraction failures (no tables found is not an error)
-            # Log at DEBUG level for troubleshooting (MultiExtractor logs at INFO/WARNING)
-            logger.debug(f"[CamelotExtractor] Extraction failed for {pdf_path} page {page_num}: {e}")
+            logger.warning(f"[{self.name}] Extraction failed for page {page_num}: {e}")
             return []
 
         # Convert Camelot tables to ExtractionResult

@@ -44,7 +44,7 @@ class Migration(migrations.Migration):
             fields=[
                 ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
                 ('name', models.CharField(max_length=100, null=True)),
-                ('document', models.FileField(storage=api.models.MyStorage(), upload_to=api.models.upload_path)),
+                ('document', models.FileField(upload_to=api.models.upload_path)),
                 ('zip_csv', models.FileField(null=True, upload_to='')),
                 ('f_type', models.CharField(max_length=5, null=True)),
                 ('total_pages', models.PositiveIntegerField(blank=True, null=True)),

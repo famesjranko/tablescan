@@ -140,6 +140,31 @@ USE_TZ = True
 STATIC_URL = "/static/"
 STATICFILES_DIRS = [os.path.join(BASE_DIR, "static")]
 
+# Cache Configuration (using Redis for extraction variants, or local memory as fallback)
+_redis_url = os.environ.get('REDIS_URL', '')
+
+if _redis_url:
+    # Use Redis cache when available (production/Docker)
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+            'LOCATION': _redis_url,
+            'TIMEOUT': 600,  # 10 minutes default TTL
+        }
+    }
+else:
+    # Fallback to local memory cache for development without Redis
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+            'LOCATION': 'extraction-variants',
+            'TIMEOUT': 600,
+        }
+    }
+
+# Extraction variants cache TTL (seconds)
+EXTRACTION_VARIANTS_CACHE_TTL = 600  # 10 minutes
+
 # Celery Configuration
 CELERY_BROKER_URL = os.environ.get('CELERY_BROKER_URL', 'redis://localhost:6379/0')
 CELERY_RESULT_BACKEND = os.environ.get('CELERY_RESULT_BACKEND', 'redis://localhost:6379/0')
