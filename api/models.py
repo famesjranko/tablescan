@@ -16,6 +16,7 @@ import os
 from django.db import models
 from django.db.models.deletion import SET_DEFAULT
 from django.contrib.auth.models import User
+from django.core.validators import MinValueValidator
 
 from django.utils.encoding import force_str
 import re
@@ -250,10 +251,22 @@ class TableSelection(models.Model):
         on_delete=models.CASCADE,
     )
     page_num = models.PositiveIntegerField()
-    x1 = models.FloatField(help_text="Left edge X coordinate (0-100%, top-left origin)")
-    y1 = models.FloatField(help_text="Top edge Y coordinate (0-100%, top-left origin)")
-    x2 = models.FloatField(help_text="Right edge X coordinate (0-100%, top-left origin)")
-    y2 = models.FloatField(help_text="Bottom edge Y coordinate (0-100%, top-left origin)")
+    x1 = models.FloatField(
+        validators=[MinValueValidator(0.0)],
+        help_text="Left edge X coordinate (0-100%, top-left origin)"
+    )
+    y1 = models.FloatField(
+        validators=[MinValueValidator(0.0)],
+        help_text="Top edge Y coordinate (0-100%, top-left origin)"
+    )
+    x2 = models.FloatField(
+        validators=[MinValueValidator(0.0)],
+        help_text="Right edge X coordinate (0-100%, top-left origin)"
+    )
+    y2 = models.FloatField(
+        validators=[MinValueValidator(0.0)],
+        help_text="Bottom edge Y coordinate (0-100%, top-left origin)"
+    )
     confidence = models.FloatField(
         null=True,
         blank=True,

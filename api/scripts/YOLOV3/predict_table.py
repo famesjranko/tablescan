@@ -449,8 +449,6 @@ def detect_tables(file_path, page_number, output_type, report_db, extract_dir,
 
 
 def extract_tables_direct_readonly(file_path: str, page_number: int,
-                                   flavor: str = 'auto', row_tol: int = 2,
-                                   strip_text: str = '\n',
                                    merge_headers: bool = True) -> List[ExtractionResult]:
     """
     Extract tables directly using multiple extractors without saving.
@@ -466,9 +464,6 @@ def extract_tables_direct_readonly(file_path: str, page_number: int,
     Args:
         file_path: Path to PDF file
         page_number: Page number to process
-        flavor: Camelot flavor ('auto', 'lattice', or 'stream') - used for fallback
-        row_tol: Row tolerance for Camelot parsing
-        strip_text: Characters to strip from cell text
         merge_headers: Whether to merge fragmented multi-row headers
 
     Returns:
@@ -823,9 +818,6 @@ def extract_tables_direct(file_path: str, page_number: int, output_type: str,
     results = extract_tables_direct_readonly(
         file_path=file_path,
         page_number=page_number,
-        flavor=flavor,
-        row_tol=row_tol,
-        strip_text=strip_text,
         merge_headers=merge_headers
     )
 

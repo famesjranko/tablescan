@@ -25,6 +25,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.decorators import action
 
 from django_filters.rest_framework import DjangoFilterBackend
+from django.db.models import Count, Q
 
 from .permissions import IsReportOwner
 
@@ -429,14 +430,15 @@ class ReportsListView(LoginRequiredMixin, ListView):
         search = self.request.GET.get('search', '')
         if search:
             queryset = queryset.filter(name__icontains=search)
+        # Annotate with table count to avoid N+1 queries
+        queryset = queryset.annotate(
+            table_count=Count('extracted', filter=Q(extracted__f_type='csv'))
+        )
         return queryset
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context['search_query'] = self.request.GET.get('search', '')
-        # Add table count to each report
-        for report in context['reports']:
-            report.table_count = report.extracted.filter(f_type='csv').count()
         return context
 
 
@@ -489,7 +491,7 @@ class ReportDeleteView(View):
     """Delete a report and its extracted files"""
 
     def post(self, request, pk):
-        report = get_object_or_404(Report, pk=pk)
+        report = get_object_or_404(Report, pk=pk, owner=request.user)
         report_name = report.name
         report.delete()
         messages.success(request, f'Report "{report_name}" deleted successfully.')
@@ -500,7 +502,7 @@ class TablePreviewView(View):
     """AJAX endpoint to preview CSV table contents"""
 
     def get(self, request, pk):
-        extracted = get_object_or_404(Extracted, pk=pk)
+        extracted = get_object_or_404(Extracted, pk=pk, report__owner=request.user)
 
         if not extracted.file or extracted.f_type != 'csv':
             return JsonResponse({'error': 'No CSV file available'}, status=404)
@@ -537,7 +539,7 @@ class DownloadAllCSVView(View):
     """Download all CSV files for a report as a ZIP"""
 
     def get(self, request, pk):
-        report = get_object_or_404(Report, pk=pk)
+        report = get_object_or_404(Report, pk=pk, owner=request.user)
         csv_files = report.extracted.filter(f_type='csv')
 
         if not csv_files.exists():

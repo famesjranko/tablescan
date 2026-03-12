@@ -43,31 +43,6 @@ class ExtractedSerializer(serializers.HyperlinkedModelSerializer):
         )
 
 
-class ReportSerializer2(serializers.ModelSerializer):
-    """
-    Report Model Serializer 2
-    """
-
-    # link Report to it's connected Extracted model
-    extracted = serializers.SlugRelatedField(
-        many=True, read_only=True, slug_field="file"
-    )  # send raw json
-
-    class Meta:
-        model = Report
-        fields = (
-            "id",
-            "name",
-            "f_type",
-            "document",
-            "zip_csv",
-            "total_pages",
-            "start_page",
-            "end_page",
-            "extracted",
-        )
-
-
 class ExtractedSerializer2(serializers.HyperlinkedModelSerializer):
     """
     Extracted Model Serializer 2
@@ -139,26 +114,6 @@ class TableSelectionSerializer(serializers.ModelSerializer):
             "created_at",
         )
 
-    def validate_x1(self, value):
-        if value < 0:
-            raise ValidationError("x1 must be non-negative.")
-        return value
-
-    def validate_y1(self, value):
-        if value < 0:
-            raise ValidationError("y1 must be non-negative.")
-        return value
-
-    def validate_x2(self, value):
-        if value < 0:
-            raise ValidationError("x2 must be non-negative.")
-        return value
-
-    def validate_y2(self, value):
-        if value < 0:
-            raise ValidationError("y2 must be non-negative.")
-        return value
-
     def validate(self, attrs):
         # Validate box orientation: x1 < x2 and y1 < y2
         x1 = attrs.get("x1")
@@ -182,18 +137,18 @@ class TableSelectionSerializer(serializers.ModelSerializer):
             if page_num < 1:
                 raise ValidationError({"page_num": "page_num must be at least 1."})
 
-        # Only set defaults when creating new objects (not during partial updates)
-        # self.instance is None when creating, set to the object when updating
-        if self.instance is None:
-            # Set default source to 'manual' if not provided
-            if "source" not in attrs or attrs.get("source") is None:
-                attrs["source"] = "manual"
-
-            # Set default status based on source
-            if "status" not in attrs or attrs.get("status") is None:
-                if attrs.get("source") == "manual":
-                    attrs["status"] = "approved"
-                else:
-                    attrs["status"] = "pending"
-
         return attrs
+
+    def create(self, validated_data):
+        # Set default source to 'manual' if not provided
+        if "source" not in validated_data or validated_data.get("source") is None:
+            validated_data["source"] = "manual"
+
+        # Set default status based on source
+        if "status" not in validated_data or validated_data.get("status") is None:
+            if validated_data.get("source") == "manual":
+                validated_data["status"] = "approved"
+            else:
+                validated_data["status"] = "pending"
+
+        return super().create(validated_data)

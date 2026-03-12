@@ -343,9 +343,6 @@ def process_page_with_routing(
             direct_results = yolo['extract_tables_direct_readonly'](
                 file_path=file_path,
                 page_number=page_num,
-                flavor=flavor,
-                row_tol=row_tol,
-                strip_text=strip_text,
                 merge_headers=merge_headers
             )
             candidates.extend(direct_results)
@@ -380,9 +377,6 @@ def process_page_with_routing(
             direct_results = yolo['extract_tables_direct_readonly'](
                 file_path=file_path,
                 page_number=page_num,
-                flavor=flavor,
-                row_tol=row_tol,
-                strip_text=strip_text,
                 merge_headers=merge_headers
             )
             candidates.extend(direct_results)
@@ -842,15 +836,19 @@ def extract(file_path: str, start_page: int, end_page: int,
             )
     except Exception as e:
         error_msg = "".join(["from extraction pipeline: ", str(e)])
+        pool.terminate()
+        pool.join()
         report_db.delete()
         log.output("INFO", "removed database object")
         raise SystemError(error_msg)
-
-    # Multi-processing 3: Don't forget to close
-    pool.close()
-
-    # Multi-processing 4: wait until process queue is empty.
-    pool.join()
+    finally:
+        # Multi-processing 3: Ensure pool cleanup even on exception
+        try:
+            pool.close()
+            # Multi-processing 4: wait until process queue is empty.
+            pool.join()
+        except Exception:
+            pass  # Pool already terminated in except block
 
     log.output("INFO", "finished extracting")
 

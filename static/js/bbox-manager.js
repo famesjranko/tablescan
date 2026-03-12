@@ -98,7 +98,7 @@ export class BoundingBoxManager {
      */
     canvasToPdf(canvasX, canvasY, pdfCanvas) {
         const scale = parseFloat(pdfCanvas.dataset.scale) || 1.5;
-        const pdfHeight = parseFloat(pdfCanvas.dataset.pdfHeight);
+        const pdfHeight = parseFloat(pdfCanvas.dataset.pdfHeight) || 792; // Default letter-size height
 
         // Canvas to PDF: divide by scale, then flip Y axis
         const pdfX = canvasX / scale;
@@ -116,7 +116,7 @@ export class BoundingBoxManager {
      */
     pdfToCanvas(pdfX, pdfY, pdfCanvas) {
         const scale = parseFloat(pdfCanvas.dataset.scale) || 1.5;
-        const pdfHeight = parseFloat(pdfCanvas.dataset.pdfHeight);
+        const pdfHeight = parseFloat(pdfCanvas.dataset.pdfHeight) || 792; // Default letter-size height
 
         // PDF to canvas: flip Y axis first, then multiply by scale
         const canvasX = pdfX * scale;

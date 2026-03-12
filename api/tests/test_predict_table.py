@@ -51,7 +51,13 @@ class DetectTableRegionsTests(TestCase):
         """detect_table_regions should return a list."""
         if self.detect_table_regions is None:
             self.skipTest("Could not import detect_table_regions")
+
+        # Given: a test PDF with tables on page 1
+
+        # When: detect_table_regions is called
         result = self.detect_table_regions(self.test_pdf_path, 1)
+
+        # Then: the result is a list
         self.assertIsInstance(result, list)
 
     @requires_poppler
@@ -59,8 +65,13 @@ class DetectTableRegionsTests(TestCase):
         """Each result should be a dict with x1, y1, x2, y2, confidence keys."""
         if self.detect_table_regions is None:
             self.skipTest("Could not import detect_table_regions")
+
+        # Given: a test PDF with tables on page 1
+
+        # When: detect_table_regions is called
         result = self.detect_table_regions(self.test_pdf_path, 1)
 
+        # Then: each region dict contains required coordinate and confidence keys
         for region in result:
             self.assertIsInstance(region, dict)
             self.assertIn('x1', region)
@@ -74,8 +85,13 @@ class DetectTableRegionsTests(TestCase):
         """Coordinates should be numeric (floats)."""
         if self.detect_table_regions is None:
             self.skipTest("Could not import detect_table_regions")
+
+        # Given: a test PDF with tables on page 1
+
+        # When: detect_table_regions is called
         result = self.detect_table_regions(self.test_pdf_path, 1)
 
+        # Then: all coordinates are numeric values
         for region in result:
             self.assertIsInstance(region['x1'], (int, float))
             self.assertIsInstance(region['y1'], (int, float))
@@ -87,8 +103,13 @@ class DetectTableRegionsTests(TestCase):
         """Confidence should be numeric or None."""
         if self.detect_table_regions is None:
             self.skipTest("Could not import detect_table_regions")
+
+        # Given: a test PDF with tables on page 1
+
+        # When: detect_table_regions is called
         result = self.detect_table_regions(self.test_pdf_path, 1)
 
+        # Then: confidence values are numeric or None
         for region in result:
             confidence = region['confidence']
             self.assertTrue(

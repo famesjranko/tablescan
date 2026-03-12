@@ -305,38 +305,36 @@ def extract_from_selections(self, report_id):
 
         # Get PDF page dimensions for coordinate conversion
         file_path = report.document.path
-        pdf_doc = fitz.open(file_path)
 
         # Group selections by page_num with coordinate conversion
         # Both manual and YOLO selections use percentage coords (0-100) for display
         # Convert to PDF coordinates for Camelot extraction
         selections_by_page = defaultdict(list)
-        for sel in approved_selections:
-            log.output("INFO", f"[Task {self.request.id}] Processing selection {sel.id}: "
-                      f"source='{sel.source}', page={sel.page_num}")
+        with fitz.open(file_path) as pdf_doc:
+            for sel in approved_selections:
+                log.output("INFO", f"[Task {self.request.id}] Processing selection {sel.id}: "
+                          f"source='{sel.source}', page={sel.page_num}")
 
-            # Both manual and YOLO selections are now in percentage coords (0-100)
-            page = pdf_doc[sel.page_num - 1]  # fitz uses 0-indexed pages
-            page_width = page.rect.width
-            page_height = page.rect.height
+                # Both manual and YOLO selections are now in percentage coords (0-100)
+                page = pdf_doc[sel.page_num - 1]  # fitz uses 0-indexed pages
+                page_width = page.rect.width
+                page_height = page.rect.height
 
-            pdf_x1 = (sel.x1 / 100) * page_width
-            pdf_x2 = (sel.x2 / 100) * page_width
-            # Y-flip: canvas origin is top-left, PDF origin is bottom-left
-            # y1 (canvas top) → higher PDF Y value (top in PDF coords)
-            # y2 (canvas bottom) → lower PDF Y value (bottom in PDF coords)
-            pdf_y1 = (1 - sel.y1 / 100) * page_height
-            pdf_y2 = (1 - sel.y2 / 100) * page_height
+                pdf_x1 = (sel.x1 / 100) * page_width
+                pdf_x2 = (sel.x2 / 100) * page_width
+                # Y-flip: canvas origin is top-left, PDF origin is bottom-left
+                # y1 (canvas top) → higher PDF Y value (top in PDF coords)
+                # y2 (canvas bottom) → lower PDF Y value (bottom in PDF coords)
+                pdf_y1 = (1 - sel.y1 / 100) * page_height
+                pdf_y2 = (1 - sel.y2 / 100) * page_height
 
-            table_area = (pdf_x1, pdf_y1, pdf_x2, pdf_y2)
-            log.output("INFO", f"[Task {self.request.id}] {sel.source.upper()} COORDS: "
-                      f"canvas ({sel.x1:.1f}%, {sel.y1:.1f}%, {sel.x2:.1f}%, {sel.y2:.1f}%) → "
-                      f"PDF ({pdf_x1:.1f}, {pdf_y1:.1f}, {pdf_x2:.1f}, {pdf_y2:.1f}) "
-                      f"[page {page_width:.0f}x{page_height:.0f}]")
+                table_area = (pdf_x1, pdf_y1, pdf_x2, pdf_y2)
+                log.output("INFO", f"[Task {self.request.id}] {sel.source.upper()} COORDS: "
+                          f"canvas ({sel.x1:.1f}%, {sel.y1:.1f}%, {sel.x2:.1f}%, {sel.y2:.1f}%) → "
+                          f"PDF ({pdf_x1:.1f}, {pdf_y1:.1f}, {pdf_x2:.1f}, {pdf_y2:.1f}) "
+                          f"[page {page_width:.0f}x{page_height:.0f}]")
 
-            selections_by_page[sel.page_num].append(table_area)
-
-        pdf_doc.close()
+                selections_by_page[sel.page_num].append(table_area)
 
         log.output("INFO", f"[Task {self.request.id}] Found {len(approved_selections)} approved selections across {len(selections_by_page)} pages")
 
