@@ -228,7 +228,8 @@ class Extracted(models.Model):
 class TableSelection(models.Model):
     """
     Stores table region selections (auto-detected or manual) with approval status.
-    Coordinates are in PDF space (bottom-left origin).
+    Coordinates are in percentage (0-100), top-left origin for frontend display.
+    PDF coordinate conversion happens at extraction time in tasks.py.
     """
 
     SOURCE_CHOICES = (
@@ -249,10 +250,10 @@ class TableSelection(models.Model):
         on_delete=models.CASCADE,
     )
     page_num = models.PositiveIntegerField()
-    x1 = models.FloatField(help_text="Left edge X coordinate (PDF space)")
-    y1 = models.FloatField(help_text="Bottom edge Y coordinate (PDF space)")
-    x2 = models.FloatField(help_text="Right edge X coordinate (PDF space)")
-    y2 = models.FloatField(help_text="Top edge Y coordinate (PDF space)")
+    x1 = models.FloatField(help_text="Left edge X coordinate (0-100%, top-left origin)")
+    y1 = models.FloatField(help_text="Top edge Y coordinate (0-100%, top-left origin)")
+    x2 = models.FloatField(help_text="Right edge X coordinate (0-100%, top-left origin)")
+    y2 = models.FloatField(help_text="Bottom edge Y coordinate (0-100%, top-left origin)")
     confidence = models.FloatField(
         null=True,
         blank=True,

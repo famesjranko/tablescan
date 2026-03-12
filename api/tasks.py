@@ -5,14 +5,14 @@ tasks.py
 
 from collections import defaultdict
 
+import fitz
 from celery import shared_task
 from django.conf import settings
 from pathlib import Path, PurePath
 
 from api.scripts import table_extract
 from api.scripts.logging import Logging
-from api.scripts.YOLOV3.predict_table import detect_table_regions, save_extraction_results
-from api.scripts.extractors.multi_extractor import MultiExtractor
+from api.scripts.YOLOV3.predict_table import detect_table_regions, save_extraction_results, extract_from_manual_areas
 from api.models import Report, TableSelection
 
 from timeit import default_timer as timer
@@ -216,7 +216,7 @@ def detect_tables_for_review(self, report_id):
             'status': 'completed',
             'report_id': report_id,
             'selections_count': selections_created,
-            'redirect_url': f'/book-viewer/{report_id}/'
+            'redirect_url': f'/reports/{report_id}/viewer/'
         }
 
     except Exception as e:
@@ -250,7 +250,7 @@ def extract_from_selections(self, report_id):
 
     Gets all TableSelection records with status='approved' (includes both
     YOLO-approved and manual selections), groups them by page, and uses
-    MultiExtractor to extract tables from those regions.
+    the same Camelot extraction logic as auto mode to extract tables.
 
     Args:
         report_id: Database ID of the Report
@@ -303,11 +303,40 @@ def extract_from_selections(self, report_id):
                 'message': 'No approved selections to extract'
             }
 
-        # Group selections by page_num
+        # Get PDF page dimensions for coordinate conversion
+        file_path = report.document.path
+        pdf_doc = fitz.open(file_path)
+
+        # Group selections by page_num with coordinate conversion
+        # Both manual and YOLO selections use percentage coords (0-100) for display
+        # Convert to PDF coordinates for Camelot extraction
         selections_by_page = defaultdict(list)
         for sel in approved_selections:
-            # Build table_areas as (x1, y1, x2, y2) tuples in PDF space
-            selections_by_page[sel.page_num].append((sel.x1, sel.y1, sel.x2, sel.y2))
+            log.output("INFO", f"[Task {self.request.id}] Processing selection {sel.id}: "
+                      f"source='{sel.source}', page={sel.page_num}")
+
+            # Both manual and YOLO selections are now in percentage coords (0-100)
+            page = pdf_doc[sel.page_num - 1]  # fitz uses 0-indexed pages
+            page_width = page.rect.width
+            page_height = page.rect.height
+
+            pdf_x1 = (sel.x1 / 100) * page_width
+            pdf_x2 = (sel.x2 / 100) * page_width
+            # Y-flip: canvas origin is top-left, PDF origin is bottom-left
+            # y1 (canvas top) → higher PDF Y value (top in PDF coords)
+            # y2 (canvas bottom) → lower PDF Y value (bottom in PDF coords)
+            pdf_y1 = (1 - sel.y1 / 100) * page_height
+            pdf_y2 = (1 - sel.y2 / 100) * page_height
+
+            table_area = (pdf_x1, pdf_y1, pdf_x2, pdf_y2)
+            log.output("INFO", f"[Task {self.request.id}] {sel.source.upper()} COORDS: "
+                      f"canvas ({sel.x1:.1f}%, {sel.y1:.1f}%, {sel.x2:.1f}%, {sel.y2:.1f}%) → "
+                      f"PDF ({pdf_x1:.1f}, {pdf_y1:.1f}, {pdf_x2:.1f}, {pdf_y2:.1f}) "
+                      f"[page {page_width:.0f}x{page_height:.0f}]")
+
+            selections_by_page[sel.page_num].append(table_area)
+
+        pdf_doc.close()
 
         log.output("INFO", f"[Task {self.request.id}] Found {len(approved_selections)} approved selections across {len(selections_by_page)} pages")
 
@@ -318,7 +347,6 @@ def extract_from_selections(self, report_id):
         })
 
         # Setup extraction directories
-        file_path = report.document.path
         working_dir = Path(file_path).parent
         extract_dir = {
             "csv": working_dir / "csv",
@@ -330,8 +358,6 @@ def extract_from_selections(self, report_id):
         for dir_path in extract_dir.values():
             dir_path.mkdir(parents=True, exist_ok=True)
 
-        # Initialize multi-extractor
-        multi_extractor = MultiExtractor()
         total_tables_extracted = 0
         pages_to_process = sorted(selections_by_page.keys())
         total_pages = len(pages_to_process)
@@ -355,11 +381,13 @@ def extract_from_selections(self, report_id):
             log.output("INFO", f"[Task {self.request.id}] Page {page_num}: extracting {len(table_areas)} table region(s)")
 
             try:
-                # Extract best results for this page using the approved table areas
-                results = multi_extractor.extract_best(
+                # Extract using same logic as auto mode (tries both flavors, picks best)
+                results = extract_from_manual_areas(
                     pdf_path=file_path,
                     page_num=page_num,
-                    table_areas=table_areas
+                    table_areas=table_areas,
+                    flavor='auto',
+                    merge_headers=True
                 )
 
                 if results:

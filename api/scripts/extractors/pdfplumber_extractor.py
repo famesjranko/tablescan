@@ -119,9 +119,15 @@ class PdfplumberExtractor(BaseExtractor):
                 if table_areas:
                     # Extract from specific areas
                     for i, (x1, y1, x2, y2) in enumerate(table_areas):
-                        # pdfplumber bbox format: (x0, top, x1, bottom)
-                        # Note: pdfplumber uses top-left origin, y increases downward
-                        cropped = page.within_bbox((x1, y1, x2, y2))
+                        # Convert from PDF coordinates (origin bottom-left, y increases up)
+                        # to pdfplumber coordinates (origin top-left, y increases down)
+                        # PDF y1 = top (higher value) → plumber top (lower value)
+                        # PDF y2 = bottom (lower value) → plumber bottom (higher value)
+                        page_height = page.height
+                        plumber_top = page_height - y1
+                        plumber_bottom = page_height - y2
+                        plumber_bbox = (x1, plumber_top, x2, plumber_bottom)
+                        cropped = page.within_bbox(plumber_bbox)
                         tables = cropped.extract_tables(table_settings)
 
                         for j, table_data in enumerate(tables):

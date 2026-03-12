@@ -718,6 +718,11 @@ def save_extraction_results(results: List[ExtractionResult], file_path: str,
         if structure is None:
             structure = build_structure_json(result.dataframe, result.metadata)
 
+        # Add header_spans to structure if present in metadata
+        header_spans = result.metadata.get('header_spans') if result.metadata else None
+        if header_spans and structure:
+            structure['header_spans'] = header_spans
+
         # Build parsing report for return value
         parsing_report = result.metadata.get('parsing_report', {}) if result.metadata else {}
         if not parsing_report:
@@ -858,8 +863,8 @@ def detect_table_regions(file_path: str, page_number: int) -> List[dict]:
 
     Returns:
         List of dicts with keys: x1, y1, x2, y2, confidence
-        Coordinates are in PDF space (bottom-left origin)
-        Y-flip applied: pdf_y = (1 - y_norm) * H_pdf (see bboxes_pdf)
+        Coordinates are in percentage (0-100), top-left origin (same as manual selections)
+        PDF coordinate conversion happens at extraction time in tasks.py
     """
     pdf_file = file_path
     pg = page_number
@@ -880,25 +885,72 @@ def detect_table_regions(file_path: str, page_number: int) -> List[dict]:
     except FileNotFoundError:
         pass  # Already cleaned up
 
-    # Convert bboxes to PDF coordinates
+    # Convert bboxes to percentage coordinates (0-100) for frontend display
+    # Frontend uses top-left origin like image coordinates
+    # PDF coordinate conversion happens at extraction time (in tasks.py)
     regions = []
     for bbox in output:
         # bbox format: [x1, y1, x2, y2, class, confidence]
         # confidence is at index 5
         confidence = bbox[5] if len(bbox) > 5 else None
 
-        # Get PDF coordinates using existing function (applies Y-flip)
-        [x1, y1, x2, y2] = bboxes_pdf(img, pdf_page, bbox)
+        # Get normalized image coordinates (0-1 range, top-left origin)
+        [x1_norm, y1_norm, x2_norm, y2_norm] = norm_bbox(img, bbox)
 
+        # Convert to percentage (0-100) - same coordinate system as manual selections
+        # y coordinates remain as-is since both image and screen use top-left origin
         regions.append({
-            'x1': x1,
-            'y1': y1,
-            'x2': x2,
-            'y2': y2,
-            'confidence': confidence
+            'x1': x1_norm * 100,
+            'y1': y1_norm * 100,
+            'x2': x2_norm * 100,
+            'y2': y2_norm * 100,
+            'confidence': confidence,
         })
 
     return regions
+
+
+def _boxes_overlap(box1: tuple, box2: tuple, threshold: float = 0.3) -> bool:
+    """
+    Check if two bounding boxes overlap significantly.
+
+    Args:
+        box1: (x1, y1, x2, y2) first box in PDF coordinates
+        box2: (x1, y1, x2, y2) second box in PDF coordinates
+        threshold: Minimum IoU (intersection over union) to consider as overlap
+
+    Returns:
+        True if boxes overlap above threshold
+    """
+    # Normalize coordinates (ensure x1 < x2 and handle y-flip)
+    ax1, ay1, ax2, ay2 = box1
+    bx1, by1, bx2, by2 = box2
+
+    # Ensure proper ordering
+    ax1, ax2 = min(ax1, ax2), max(ax1, ax2)
+    ay1, ay2 = min(ay1, ay2), max(ay1, ay2)
+    bx1, bx2 = min(bx1, bx2), max(bx1, bx2)
+    by1, by2 = min(by1, by2), max(by1, by2)
+
+    # Calculate intersection
+    ix1 = max(ax1, bx1)
+    iy1 = max(ay1, by1)
+    ix2 = min(ax2, bx2)
+    iy2 = min(ay2, by2)
+
+    if ix1 >= ix2 or iy1 >= iy2:
+        return False  # No intersection
+
+    intersection = (ix2 - ix1) * (iy2 - iy1)
+    area_a = (ax2 - ax1) * (ay2 - ay1)
+    area_b = (bx2 - bx1) * (by2 - by1)
+    union = area_a + area_b - intersection
+
+    if union <= 0:
+        return False
+
+    iou = intersection / union
+    return iou >= threshold
 
 
 def extract_from_manual_areas(
@@ -911,18 +963,23 @@ def extract_from_manual_areas(
     merge_headers: bool = True
 ) -> List[ExtractionResult]:
     """
-    Extract tables from manually specified areas using the same logic as detect_tables.
+    Extract tables from manually specified areas using MultiExtractor.
 
-    This uses Camelot with auto-flavor detection and accuracy comparison,
-    matching the quality of automatic extraction.
+    Uses the same multi-extractor pipeline as auto extraction (Camelot lattice,
+    Camelot stream, pdfplumber) with ExtractionScorer to select the best result.
+
+    Unlike passing table_areas directly to extractors (which constrains extraction
+    too tightly and can clip headers), this function lets MultiExtractor auto-detect
+    tables on the page, then filters results to only include tables that overlap
+    with the user's selection areas.
 
     Args:
         pdf_path: Path to PDF file
         page_num: Page number (1-indexed)
         table_areas: List of (x1, y1, x2, y2) tuples in PDF coordinates
-        flavor: 'auto', 'lattice', or 'stream'
-        row_tol: Row tolerance for stream flavor
-        strip_text: Characters to strip from cells
+        flavor: Unused, kept for backward compatibility
+        row_tol: Unused, kept for backward compatibility
+        strip_text: Unused, kept for backward compatibility
         merge_headers: Whether to merge fragmented headers
 
     Returns:
@@ -930,100 +987,90 @@ def extract_from_manual_areas(
     """
     log = Logging()
 
-    # Convert table_areas tuples to Camelot string format
-    camelot_areas = [f"{x1},{y1},{x2},{y2}" for (x1, y1, x2, y2) in table_areas]
+    # Use MultiExtractor with auto-detection (no table_areas constraint)
+    # This matches the auto extraction flow and produces better quality results
+    # We then filter to only tables that overlap with user's selection
+    multi_extractor = MultiExtractor()
 
-    def run_camelot(use_flavor, areas):
-        """Run Camelot extraction and return results with accuracy."""
-        kwargs = {
-            'filepath': pdf_path,
-            'pages': str(page_num),
-            'flavor': use_flavor,
-            'table_areas': areas,
-            'backend': 'poppler',
-        }
-        if use_flavor == 'stream':
-            kwargs['row_tol'] = row_tol
-        if strip_text:
-            kwargs['strip_text'] = strip_text
+    try:
+        best_results, comparison = multi_extractor.extract_with_comparison(
+            pdf_path, page_num, table_areas=None
+        )
+        extractors_summary = [f"{e['name']}:{e['tables_found']}" for e in comparison.get("extractors_run", [])]
+        log.output('INFO', f'Manual extraction - MultiExtractor ran: {", ".join(extractors_summary)}')
+    except Exception as e:
+        log.output('WARNING', f'MultiExtractor failed: {e}')
+        best_results = []
 
-        try:
-            result = camelot.read_pdf(**kwargs)
-            total_acc = sum(
-                t.parsing_report.get('accuracy', 0)
-                for t in result if hasattr(t, 'parsing_report')
-            )
-            count = len([t for t in result if hasattr(t, 'parsing_report')])
-            avg_acc = total_acc / count if count > 0 else 0
-            return result, avg_acc
-        except Exception as e:
-            log.output('WARNING', f'Camelot {use_flavor} failed: {e}')
-            return None, 0
+    # Filter results to only tables that overlap with user's selection areas
+    filtered_results = []
+    for result in best_results:
+        # Get table bounding box from metadata
+        table_bbox = None
+        if result.metadata:
+            # Try different metadata keys that might contain bbox
+            if 'bbox' in result.metadata:
+                table_bbox = result.metadata['bbox']
+            elif '_bbox' in result.metadata:
+                table_bbox = result.metadata['_bbox']
 
-    # Auto-detect or use specified flavor
-    if flavor == 'auto':
-        # Try both flavors and pick best
-        result_lattice, acc_lattice = run_camelot('lattice', camelot_areas)
-        result_stream, acc_stream = run_camelot('stream', camelot_areas)
-
-        log.output('INFO', f'Manual extraction - lattice: {acc_lattice:.1f}%, stream: {acc_stream:.1f}%')
-
-        # Pick better result (prefer lattice if close)
-        if result_stream is not None and acc_stream > acc_lattice + 5:
-            output_camelot = result_stream
-            actual_flavor = 'stream'
-        elif result_lattice is not None:
-            output_camelot = result_lattice
-            actual_flavor = 'lattice'
-        elif result_stream is not None:
-            output_camelot = result_stream
-            actual_flavor = 'stream'
+        # Check if table overlaps with any user selection
+        overlaps = False
+        if table_bbox:
+            for sel_area in table_areas:
+                if _boxes_overlap(table_bbox, sel_area, threshold=0.2):
+                    overlaps = True
+                    break
         else:
-            output_camelot = []
-            actual_flavor = 'none'
-    else:
-        output_camelot, _ = run_camelot(flavor, camelot_areas)
-        actual_flavor = flavor
-        if output_camelot is None:
-            output_camelot = []
+            # No bbox in metadata - assume it overlaps (single table on page)
+            overlaps = len(best_results) == 1
+
+        if overlaps:
+            filtered_results.append(result)
+
+    log.output('INFO', f'Manual extraction - filtered {len(filtered_results)}/{len(best_results)} tables by selection overlap')
+
+    # If filtering removed all results, fall back to constrained extraction
+    if not filtered_results and best_results:
+        log.output('INFO', 'Manual extraction - no overlap found, trying constrained extraction')
+        try:
+            filtered_results, _ = multi_extractor.extract_with_comparison(
+                pdf_path, page_num, table_areas=table_areas
+            )
+        except Exception as e:
+            log.output('WARNING', f'Constrained extraction also failed: {e}')
+            filtered_results = []
 
     # Process results
     results = []
-    for i, table in enumerate(output_camelot):
-        if not tableValidate(table.df):
-            continue
-
-        df = table.df.fillna("")
+    for i, result in enumerate(filtered_results):
+        df = result.dataframe.fillna("")
         df = strip_empty_rows_and_cols(df)
+
+        if not tableValidate(df):
+            continue
 
         header_spans = []
         if merge_headers:
             df, header_spans = process_table_headers(df, merge_headers=True)
 
-        # Get confidence from parsing report
-        confidence = 0.0
-        if hasattr(table, 'parsing_report'):
-            confidence = table.parsing_report.get('accuracy', 0) / 100.0
-
-        # Build metadata
-        metadata = {
+        # Enrich metadata with manual selection info
+        metadata = result.metadata.copy() if result.metadata else {}
+        metadata.update({
             'table_index': i,
             'page_num': page_num,
-            'flavor': actual_flavor,
             'source': 'manual_selection',
             'header_spans': header_spans,
-        }
-        if hasattr(table, 'parsing_report'):
-            metadata['parsing_report'] = table.parsing_report
+        })
 
         results.append(ExtractionResult(
             dataframe=df,
-            confidence=confidence,
-            method=f'camelot_{actual_flavor}',
+            confidence=result.confidence,
+            method=result.method,
             metadata=metadata
         ))
 
-    log.output('INFO', f'Manual extraction: {len(results)} table(s) using {actual_flavor}')
+    log.output('INFO', f'Manual extraction: {len(results)} table(s)')
     return results
 
 
