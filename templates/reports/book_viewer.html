@@ -181,26 +181,27 @@
     .selection-overlay.failed .selection-index {
         background: #DC2626;
     }
-    /* Highlighted state for hover correlation */
-    .selection-overlay.highlighted {
+    /* Highlighted state for hover correlation - use distinct blue color */
+    .selection-overlay.highlighted,
+    .selection-overlay.pending.highlighted,
+    .selection-overlay.approved.highlighted,
+    .selection-overlay.rejected.highlighted,
+    .selection-overlay.failed.highlighted {
         border-width: 3px;
-        box-shadow: 0 0 12px rgba(0, 0, 0, 0.25);
+        border-color: #3B82F6 !important;
+        background: rgba(59, 130, 246, 0.15) !important;
+        box-shadow: 0 0 16px rgba(59, 130, 246, 0.6);
         z-index: 10;
     }
-    .selection-overlay.pending.highlighted {
-        box-shadow: 0 0 12px rgba(245, 158, 11, 0.5);
+    .selection-overlay.highlighted .selection-index,
+    .selection-overlay.pending.highlighted .selection-index,
+    .selection-overlay.approved.highlighted .selection-index {
+        background: #3B82F6 !important;
     }
-    .selection-overlay.approved.highlighted {
-        box-shadow: 0 0 12px rgba(16, 185, 129, 0.5);
-    }
-    /* List item highlight */
+    /* List item highlight - use distinct blue color */
     .selection-list-item.highlighted {
-        background-color: #FEF3C7 !important;
-        border: 1px solid #F59E0B;
-    }
-    .selection-list-item.highlighted.approved {
-        background-color: #D1FAE5 !important;
-        border-color: #10B981;
+        background-color: #DBEAFE !important;
+        border-color: #3B82F6 !important;
     }
 </style>
 {% endblock %}
@@ -394,7 +395,7 @@
                             @mouseleave="setHoveredSelection(null)"
                         >
                             <!-- Index badge -->
-                            <div class="selection-index">
+                            <div class="selection-index" :style="hoveredSelectionId === sel.id ? 'background: #3B82F6' : ''">
                                 <span x-text="selections.indexOf(sel) + 1"></span>
                             </div>
                             <!-- Review controls for YOLO pending boxes -->
@@ -452,7 +453,7 @@
                             @mouseleave="setHoveredSelection(null)"
                         >
                             <!-- Index badge -->
-                            <div class="selection-index">
+                            <div class="selection-index" :style="hoveredSelectionId === sel.id ? 'background: #3B82F6' : ''">
                                 <span x-text="selections.indexOf(sel) + 1"></span>
                             </div>
                             <!-- Review controls for YOLO pending boxes -->
@@ -614,13 +615,14 @@
             <p class="text-sm mt-1" x-text="getEmptyStateHint()"></p>
         </div>
 
-        <div x-show="selections.length > 0" class="space-y-2 max-h-48 overflow-y-auto">
+        <div x-show="selections.length > 0" class="space-y-2 max-h-48 overflow-y-scroll pr-2">
             <template x-for="(sel, idx) in selections" :key="sel.id">
                 <div
-                    class="selection-list-item flex items-center justify-between p-2 rounded-md bg-gray-50 hover:bg-gray-100"
+                    class="selection-list-item flex items-center justify-between p-2 rounded-md bg-gray-50 hover:bg-gray-100 cursor-pointer border border-transparent"
                     :class="{ 'highlighted': hoveredSelectionId === sel.id, 'approved': sel.status === 'approved' }"
                     @mouseenter="setHoveredSelection(sel.id)"
                     @mouseleave="setHoveredSelection(null)"
+                    @click="selectTable(sel)"
                 >
                     <div class="flex items-center space-x-3">
                         <span

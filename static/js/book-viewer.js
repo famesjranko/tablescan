@@ -16,6 +16,9 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dis
 // Global storage for PDF documents to avoid Alpine proxy issues
 const pdfDocStorage = new Map();
 
+// Global storage for render tasks to avoid Alpine proxy issues with PDF.js private members
+const renderTaskStorage = new Map();
+
 export function createBookViewer(config) {
     const instanceId = `pdf_${config.reportId}_${Date.now()}`;
 
@@ -51,6 +54,9 @@ export function createBookViewer(config) {
         selections: [],
         hoveredSelectionId: null,
         selectionStyleVersion: 0,
+
+        // Render version to prevent stale renders from completing
+        _renderVersion: 0,
         isDrawing: false,
         drawingPage: null,
         startX: 0,
@@ -152,6 +158,9 @@ export function createBookViewer(config) {
          * Render current spread (two pages side-by-side)
          */
         async renderSpread() {
+            // Increment version to invalidate any in-flight renders
+            const myVersion = ++this._renderVersion;
+
             this.canvasReady = false;
             this.leftPageNum = this.currentSpread * 2 + 1;
             this.rightPageNum = this.currentSpread * 2 + 2;
@@ -162,6 +171,9 @@ export function createBookViewer(config) {
                 // Render left page
                 await this.renderPage(this.leftPageNum, 'left-page-canvas');
 
+                // Abort if a newer render started
+                if (myVersion !== this._renderVersion) return;
+
                 // Render right page if it exists
                 if (this.rightPageNum <= this.totalPages) {
                     await this.renderPage(this.rightPageNum, 'right-page-canvas');
@@ -169,6 +181,10 @@ export function createBookViewer(config) {
                     // Clear right canvas for single page or odd page count
                     this.clearCanvas('right-page-canvas');
                 }
+
+                // Abort if a newer render started
+                if (myVersion !== this._renderVersion) return;
+
                 // Wait for browser to layout canvas before updating selections
                 // getBoundingClientRect() needs a frame to return correct dimensions
                 await new Promise(resolve => requestAnimationFrame(resolve));
@@ -177,10 +193,15 @@ export function createBookViewer(config) {
                 // This triggers x-for to re-render with correct canvas dimensions
                 this.selections = [...this.selections];
             } catch (err) {
+                // Ignore errors from superseded renders
+                if (myVersion !== this._renderVersion) return;
                 console.error('Error rendering spread:', err);
                 this.renderError = err.message || 'Failed to render pages';
             } finally {
-                this.renderingPages = false;
+                // Only clear renderingPages if this is still the active render
+                if (myVersion === this._renderVersion) {
+                    this.renderingPages = false;
+                }
             }
         },
 
@@ -194,6 +215,14 @@ export function createBookViewer(config) {
             if (!canvas) {
                 console.error(`Canvas ${canvasId} not found`);
                 return;
+            }
+
+            // Cancel any pending render task for this canvas (use global storage to avoid proxy issues)
+            const taskKey = `${this._pdfInstanceId}_${canvasId}`;
+            const existingTask = renderTaskStorage.get(taskKey);
+            if (existingTask) {
+                existingTask.cancel();
+                renderTaskStorage.delete(taskKey);
             }
 
             try {
@@ -213,11 +242,20 @@ export function createBookViewer(config) {
                 canvas.dataset.pageNum = pageNum;
                 canvas.dataset.scale = scale;
 
-                await page.render({
+                const renderTask = page.render({
                     canvasContext: ctx,
                     viewport: viewport
-                }).promise;
+                });
+                renderTaskStorage.set(taskKey, renderTask);
+
+                await renderTask.promise;
+                renderTaskStorage.delete(taskKey);
             } catch (err) {
+                renderTaskStorage.delete(taskKey);
+                // Ignore cancellation errors - they're expected when navigating quickly
+                if (err.name === 'RenderingCancelledException') {
+                    return;
+                }
                 console.error(`Error rendering page ${pageNum}:`, err);
                 this.clearCanvas(canvasId);
                 throw new Error(`Failed to render page ${pageNum}`);
@@ -283,11 +321,34 @@ export function createBookViewer(config) {
         },
 
         /**
+         * Check if a page is currently visible in the spread
+         */
+        isPageVisible(pageNum) {
+            return pageNum === this.leftPageNum || pageNum === this.rightPageNum;
+        },
+
+        /**
+         * Select a table - highlight it and navigate only if needed
+         */
+        selectTable(sel) {
+            // Always highlight the selection
+            this.hoveredSelectionId = sel.id;
+
+            // Only navigate if the page isn't already visible
+            if (!this.isPageVisible(sel.page_num)) {
+                this.goToPage(sel.page_num);
+            }
+        },
+
+        /**
          * Navigate to a specific page (internal method)
          */
         goToPage(pageNum) {
             if (pageNum < 1 || pageNum > this.totalPages) return;
-            this.currentSpread = Math.floor((pageNum - 1) / 2);
+            const targetSpread = Math.floor((pageNum - 1) / 2);
+            // Skip if already on this spread
+            if (targetSpread === this.currentSpread && this.canvasReady) return;
+            this.currentSpread = targetSpread;
             this.gotoPageInput = String(pageNum);
             this.renderSpread();
         },
@@ -375,7 +436,14 @@ export function createBookViewer(config) {
             } else {
                 position = ' (lower)';
             }
-            return `#${index} - Page ${sel.page_num}${position}`;
+
+            // Add confidence for YOLO detections
+            let confidence = '';
+            if (sel.source === 'yolo' && sel.confidence != null) {
+                confidence = ` · ${Math.round(sel.confidence * 100)}%`;
+            }
+
+            return `#${index} - Page ${sel.page_num}${position}${confidence}`;
         },
 
         /**
@@ -384,6 +452,7 @@ export function createBookViewer(config) {
         getSelectionStyle(sel, side) {
             // Reference reactive properties to force Alpine to re-evaluate when they change
             const _version = this.selectionStyleVersion;
+            const _hovered = this.hoveredSelectionId; // Also track hover changes
             if (!this.canvasReady) {
                 return { display: 'none' };
             }
@@ -401,18 +470,31 @@ export function createBookViewer(config) {
             const scaleX = rect.width / 100;
             const scaleY = rect.height / 100;
 
-            // Clip coordinates to [0, 100] range to keep boxes within page boundaries
-            const x1 = Math.max(0, Math.min(100, sel.x1));
-            const y1 = Math.max(0, Math.min(100, sel.y1));
-            const x2 = Math.max(0, Math.min(100, sel.x2));
-            const y2 = Math.max(0, Math.min(100, sel.y2));
+            // Clip coordinates to [0, 100] range and inset edges slightly for rounded corners
+            // Inset by ~1% at edges to avoid clipping by container's border-radius
+            const edgeInset = 1.0;
+            const x1 = sel.x1 <= 0 ? edgeInset : Math.min(100, sel.x1);
+            const y1 = sel.y1 <= 0 ? edgeInset : Math.min(100, sel.y1);
+            const x2 = sel.x2 >= 100 ? (100 - edgeInset) : Math.max(0, sel.x2);
+            const y2 = sel.y2 >= 100 ? (100 - edgeInset) : Math.max(0, sel.y2);
 
-            return {
+            const style = {
                 left: (x1 * scaleX) + 'px',
                 top: (y1 * scaleY) + 'px',
                 width: ((x2 - x1) * scaleX) + 'px',
                 height: ((y2 - y1) * scaleY) + 'px'
             };
+
+            // Add highlight styles inline when this selection is hovered
+            if (this.hoveredSelectionId === sel.id) {
+                style.borderWidth = '3px';
+                style.borderColor = '#3B82F6';
+                style.background = 'rgba(59, 130, 246, 0.15)';
+                style.boxShadow = '0 0 16px rgba(59, 130, 246, 0.6)';
+                style.zIndex = '10';
+            }
+
+            return style;
         },
 
         /**
