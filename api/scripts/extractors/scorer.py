@@ -29,11 +29,11 @@ class ExtractionScorer:
     All scores are normalized to 0-1 range.
 
     Attributes:
-        confidence_weight: Weight for extractor confidence (default 0.4).
-        coverage_weight: Weight for cell coverage score (default 0.2).
-        regularity_weight: Weight for structure regularity score (default 0.2).
-        numeric_weight: Weight for numeric integrity score (default 0.1).
-        header_weight: Weight for header detection score (default 0.1).
+        confidence_weight: Weight for extractor confidence (default 0.35).
+        coverage_weight: Weight for cell coverage score (default 0.20).
+        regularity_weight: Weight for structure regularity score (default 0.15).
+        numeric_weight: Weight for numeric integrity score (default 0.10).
+        header_weight: Weight for header detection score (default 0.20).
     """
 
     # Regex patterns for numeric detection
@@ -45,11 +45,11 @@ class ExtractionScorer:
 
     def __init__(
         self,
-        confidence_weight: float = 0.4,
-        coverage_weight: float = 0.2,
-        regularity_weight: float = 0.2,
-        numeric_weight: float = 0.1,
-        header_weight: float = 0.1
+        confidence_weight: float = 0.35,
+        coverage_weight: float = 0.20,
+        regularity_weight: float = 0.15,
+        numeric_weight: float = 0.10,
+        header_weight: float = 0.20
     ):
         """
         Initialize ExtractionScorer with custom weights.
@@ -389,15 +389,16 @@ class ExtractionScorer:
         metadata: dict
     ) -> float:
         """
-        Score header detection confidence.
+        Score header detection confidence based on RAW first row quality.
 
-        Uses heuristics to determine if first row(s) are likely headers:
-        - First row has different character composition than data rows
-        - First row has shorter average cell length
-        - Metadata indicates header detection was performed
+        Evaluates whether the first row looks like a clean header:
+        - Non-empty values
+        - Unique values (no duplicates)
+        - Text content (not numeric)
+        - Reasonable length
 
         Args:
-            df: Extracted DataFrame.
+            df: Extracted DataFrame (raw, before header processing).
             metadata: Extraction metadata dictionary.
 
         Returns:
@@ -406,57 +407,49 @@ class ExtractionScorer:
         if df.empty or len(df) < 2:
             return 0.0
 
-        # Check if metadata has header info
-        if metadata.get('header_rows') is not None:
-            return 1.0  # Header explicitly detected
-
-        # Heuristic analysis
+        # Analyze the raw first row
         first_row = df.iloc[0]
-        data_rows = df.iloc[1:]
+        first_row_values = [str(cell).strip() for cell in first_row]
 
-        # Heuristic 1: First row has less numeric content than data
-        first_row_numeric = sum(
-            1 for cell in first_row
-            if self._looks_numeric(str(cell).strip())
-        )
-        first_row_numeric_ratio = first_row_numeric / len(first_row) if len(first_row) > 0 else 0
+        # Filter out empty/nan values
+        non_empty = [v for v in first_row_values if v and v.lower() != 'nan']
 
-        data_numeric_count = 0
-        data_total = 0
-        for _, row in data_rows.iterrows():
-            for cell in row:
-                data_total += 1
-                if self._looks_numeric(str(cell).strip()):
-                    data_numeric_count += 1
+        if not first_row_values:
+            return 0.0
 
-        data_numeric_ratio = data_numeric_count / data_total if data_total > 0 else 0
+        # Score 1: Fill rate - what % of first row cells have content
+        fill_ratio = len(non_empty) / len(first_row_values)
+        fill_score = fill_ratio
 
-        # Headers typically have less numeric content than data rows
-        # Scale by 2 to map typical 0-0.5 difference range to 0-1 score
-        numeric_diff = data_numeric_ratio - first_row_numeric_ratio
-        numeric_header_score = min(max(numeric_diff * 2, 0), 1.0)
+        # Score 2: Uniqueness - no duplicate header values
+        unique_values = set(non_empty)
+        uniqueness_score = len(unique_values) / len(non_empty) if non_empty else 0
 
-        # Heuristic 2: First row cells are generally shorter (labels vs data)
-        first_row_avg_len = sum(len(str(c)) for c in first_row) / len(first_row) if len(first_row) > 0 else 0
+        # Score 3: Text vs numeric - headers should be mostly text
+        numeric_count = sum(1 for v in non_empty if self._looks_numeric(v))
+        text_ratio = 1 - (numeric_count / len(non_empty)) if non_empty else 0
+        text_score = text_ratio
 
-        data_cell_lengths = []
-        for _, row in data_rows.iterrows():
-            for cell in row:
-                data_cell_lengths.append(len(str(cell)))
-
-        data_avg_len = sum(data_cell_lengths) / len(data_cell_lengths) if data_cell_lengths else 0
-
-        # Headers often shorter than data cells; ratio <1.5 is considered normal
-        # for header labels (beyond that, gradually penalize as less header-like)
-        if data_avg_len > 0:
-            len_ratio = first_row_avg_len / data_avg_len
-            length_header_score = 1.0 if len_ratio < 1.5 else max(0, 1.0 - (len_ratio - 1.5) / 2)
+        # Score 4: Length - header cells shouldn't be too long (data-like)
+        avg_len = sum(len(v) for v in non_empty) / len(non_empty) if non_empty else 0
+        # Optimal header length is 5-30 chars. Penalize very short (<3) or long (>50)
+        if avg_len < 3:
+            length_score = 0.5
+        elif avg_len <= 30:
+            length_score = 1.0
+        elif avg_len <= 50:
+            length_score = 0.8
         else:
-            length_header_score = 0.5
+            length_score = max(0.3, 1.0 - (avg_len - 50) / 100)
 
-        # Combine heuristics: numeric difference is weighted higher as it's a
-        # more reliable indicator of headers than cell length
-        header_score = 0.6 * numeric_header_score + 0.4 * length_header_score
+        # Combine scores with weights
+        # Fill and uniqueness most important - they indicate clean extraction
+        header_score = (
+            0.35 * fill_score +
+            0.35 * uniqueness_score +
+            0.20 * text_score +
+            0.10 * length_score
+        )
 
         return round(header_score, 4)
 

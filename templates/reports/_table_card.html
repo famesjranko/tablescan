@@ -165,13 +165,20 @@ function tableCard{{ table.id }}() {
                             <span class="text-xs text-gray-500">{{ table.extraction_method }}</span>
                         </template>
 
-                        <!-- Score badge -->
-                        {% if table.confidence_score %}
-                        <span class="text-xs px-1.5 py-0.5 rounded"
-                              :class="getScoreColor({{ table.confidence_score }})">
-                            {{ table.confidence_score|floatformat:2 }}
-                        </span>
-                        {% endif %}
+                        <!-- Score badge - shows composite score from current variant -->
+                        <template x-if="variantsAvailable && getVariantForMethod(currentMethod)?.score">
+                            <span class="text-xs px-1.5 py-0.5 rounded"
+                                  :class="getScoreColor(getVariantForMethod(currentMethod).score)">
+                                <span x-text="getVariantForMethod(currentMethod).score.toFixed(2)"></span>
+                            </span>
+                        </template>
+                        <!-- Fallback to confidence_score if no variants -->
+                        <template x-if="!variantsAvailable && {{ table.confidence_score|default:0 }}">
+                            <span class="text-xs px-1.5 py-0.5 rounded"
+                                  :class="getScoreColor({{ table.confidence_score|default:0 }})">
+                                {{ table.confidence_score|floatformat:2 }}
+                            </span>
+                        </template>
                     </div>
                     {% endif %}
                 </div>

@@ -47,9 +47,12 @@ from tabulate import tabulate
 from PyPDF2 import PdfReader
 
 from api.scripts.logging import Logging
-from api.models import Report
+from api.models import Report, TableSelection, Extracted
 from api.scripts.page_classifier import PageClassifier
-from api.scripts.extractors import VisionExtractor, ExtractionScorer
+from api.scripts.extractors import VisionExtractor, ExtractionScorer, MultiExtractor
+from django.core.cache import cache
+from django.conf import settings
+import fitz
 
 # Lazy imports for YOLO (requires torch) - only loaded when needed
 _yolo_imports = None
@@ -61,7 +64,7 @@ def _get_yolo_functions():
         from api.scripts.YOLOV3.predict_table import (
             detect_tables, extract_tables_direct, extract_tables_vision,
             extract_tables_direct_readonly, extract_tables_vision_readonly,
-            save_extraction_results
+            extract_tables_with_all_variants, save_extraction_results
         )
         _yolo_imports = {
             'detect_tables': detect_tables,
@@ -69,6 +72,7 @@ def _get_yolo_functions():
             'extract_tables_vision': extract_tables_vision,
             'extract_tables_direct_readonly': extract_tables_direct_readonly,
             'extract_tables_vision_readonly': extract_tables_vision_readonly,
+            'extract_tables_with_all_variants': extract_tables_with_all_variants,
             'save_extraction_results': save_extraction_results,
         }
     return _yolo_imports
@@ -95,6 +99,23 @@ def _load_feature_flags() -> dict:
 
 
 FEATURE_FLAGS = _load_feature_flags()
+
+
+def _cache_key_for_selection(report_id: int, selection_id: int) -> str:
+    """Generate cache key for extraction variants."""
+    return f"extraction_variants:{report_id}:{selection_id}"
+
+
+def _serialize_variants_for_cache(variants: list) -> str:
+    """Serialize extraction variants for cache using JSON."""
+    serializable = []
+    for v in variants:
+        v_copy = v.copy()
+        if v_copy.get('dataframe') is not None:
+            v_copy['dataframe_json'] = v_copy['dataframe'].to_json(orient='split')
+        v_copy.pop('dataframe', None)
+        serializable.append(v_copy)
+    return json.dumps(serializable)
 
 
 def _normalize_bbox(bbox: dict) -> tuple:
@@ -262,6 +283,9 @@ def deduplicate_by_bbox(scored_results: list, iou_threshold: float = 0.5) -> lis
 # camelot accuracy report list
 report_list = []
 
+# variants data list for caching (populated by multiprocessing callbacks)
+variants_list = []
+
 # Global page classifier instance for multiprocessing
 _page_classifier = None
 
@@ -335,17 +359,26 @@ def process_page_with_routing(
     # Collect all extraction candidates
     candidates = []
 
+    # Track variants for caching (returned to main process)
+    page_variants_data = None
+
     if classification.type == 'born_digital':
-        # Born-digital: Use direct extraction only (text-based is best)
-        log.output('INFO', f'Page {page_num}: Using direct multi-extractor (born-digital)')
+        # Born-digital: Use direct extraction with all variants for caching
+        log.output('INFO', f'Page {page_num}: Using multi-extractor with variants (born-digital)')
         try:
-            direct_results = yolo['extract_tables_direct_readonly'](
+            extraction_data = yolo['extract_tables_with_all_variants'](
                 file_path=file_path,
                 page_number=page_num,
                 merge_headers=merge_headers
             )
-            candidates.extend(direct_results)
-            log.output('INFO', f'Page {page_num}: Direct extraction found {len(direct_results)} table(s)')
+            candidates.extend(extraction_data['best_results'])
+            # Store variants for caching by main process
+            page_variants_data = {
+                'page_num': page_num,
+                'all_variants': extraction_data['all_variants'],
+                'table_bboxes': extraction_data['table_bboxes'],
+            }
+            log.output('INFO', f'Page {page_num}: Direct extraction found {len(extraction_data["best_results"])} table(s), {len(extraction_data["all_variants"])} variants')
         except Exception as e:
             log.output('WARNING', f'Page {page_num}: Direct extraction failed: {e}')
 
@@ -388,20 +421,30 @@ def process_page_with_routing(
             if legacy_yolo:
                 log.output('INFO', f'Page {page_num}: Falling back to legacy YOLO pipeline')
                 try:
-                    return yolo['detect_tables'](
+                    yolo_report = yolo['detect_tables'](
                         file_path, page_num, output_type, report_db, extract_dir,
                         flavor, row_tol, strip_text, merge_headers,
                         page_type=classification.type
                     )
+                    # YOLO fallback doesn't have variants - return compatible structure
+                    return {
+                        'parsing_report': yolo_report,
+                        'variants_data': None,
+                        'page_num': page_num,
+                    }
                 except Exception as e:
                     log.output('WARNING', f'Page {page_num}: Legacy YOLO also failed: {e}')
             else:
                 log.output('WARNING', f'Page {page_num}: No extractor available (YOLO disabled)')
 
-    # If no candidates found, return empty list
+    # If no candidates found, return empty result
     if not candidates:
         log.output('INFO', f'Page {page_num}: No tables found by any extractor')
-        return []
+        return {
+            'parsing_report': [],
+            'variants_data': None,
+            'page_num': page_num,
+        }
 
     # Score all candidates
     scored = scorer.score_all(candidates)
@@ -441,7 +484,12 @@ def process_page_with_routing(
         page_type=classification.type
     )
 
-    return report
+    # Return both parsing report and variants data for caching
+    return {
+        'parsing_report': report,
+        'variants_data': page_variants_data,
+        'page_num': page_num,
+    }
 
 
 def pdf_stats(
@@ -588,18 +636,32 @@ def collect_result(filename: str, table: Dict[str, Any], tables_list: List[Dict[
     return None
 
 
-def collect_parsing_report(report: List[Dict[str, Any]]) -> None:
+def collect_parsing_report(result: Dict[str, Any]) -> None:
     """
-    collector function for grabbing multi-processing outputs,
-    appends outputs to report_list
+    Collector function for grabbing multi-processing outputs.
+    Appends parsing reports to report_list and variants to variants_list.
 
     Args:
-        report (List[Dict[str, Any]]): camelot parsing report stats
+        result: Dict with 'parsing_report', 'variants_data', and 'page_num'
 
     Returns: None
     """
-    if report:
-        report_list.append(report)
+    if not result:
+        return None
+
+    # Handle new dict structure
+    if isinstance(result, dict) and 'parsing_report' in result:
+        parsing_report = result.get('parsing_report')
+        variants_data = result.get('variants_data')
+
+        if parsing_report:
+            report_list.append(parsing_report)
+
+        if variants_data:
+            variants_list.append(variants_data)
+    else:
+        # Backwards compatibility with old list format
+        report_list.append(result)
 
     return None
 
@@ -811,6 +873,72 @@ def extract(file_path: str, start_page: int, end_page: int,
     if progress_callback:
         progress_callback(80, "Processing extracted tables...")
 
+    # Post-process: Create TableSelections and cache variants for method switching
+    # This runs in the main process (safe for Django ORM and cache operations)
+    cache_ttl = getattr(settings, 'EXTRACTION_VARIANTS_CACHE_TTL', 600)
+
+    if variants_list:
+        log.output("INFO", f"Caching variants for {len(variants_list)} page(s)...")
+
+        # Get page dimensions for coordinate conversion
+        with fitz.open(file_path) as pdf_doc:
+            for page_data in variants_list:
+                page_num = page_data['page_num']
+                all_variants = page_data['all_variants']
+                table_bboxes = page_data.get('table_bboxes', [])
+
+                if not all_variants:
+                    continue
+
+                # Get page dimensions
+                page = pdf_doc[page_num - 1]
+                page_width = page.rect.width
+                page_height = page.rect.height
+
+                # Create TableSelection for this table
+                # Use bounding box if available, otherwise use full page
+                if table_bboxes and len(table_bboxes) > 0:
+                    bbox = table_bboxes[0]
+                    # Convert PDF coords to percentage (0-100)
+                    # bbox format: {'x0': left, 'y0': bottom, 'x1': right, 'y1': top} in PDF coords
+                    x1_pct = (bbox.get('x0', 0) / page_width) * 100
+                    x2_pct = (bbox.get('x1', page_width) / page_width) * 100
+                    # Y-flip: PDF origin is bottom-left, canvas is top-left
+                    y1_pct = (1 - bbox.get('y1', page_height) / page_height) * 100
+                    y2_pct = (1 - bbox.get('y0', 0) / page_height) * 100
+                else:
+                    # Default to full page if no bbox
+                    x1_pct, y1_pct, x2_pct, y2_pct = 0, 0, 100, 100
+
+                # Create TableSelection with source='auto'
+                selection = TableSelection.objects.create(
+                    report=report_db,
+                    page_num=page_num,
+                    x1=x1_pct,
+                    y1=y1_pct,
+                    x2=x2_pct,
+                    y2=y2_pct,
+                    source='auto',
+                    status='approved',  # Auto-approved since already extracted
+                )
+
+                # Cache all variants for this selection
+                cache_key = _cache_key_for_selection(report_db.id, selection.id)
+                cache.set(cache_key, _serialize_variants_for_cache(all_variants), timeout=cache_ttl)
+
+                # Link selection to the Extracted record for this page/table
+                # Find the Extracted record that was just created
+                extracted = Extracted.objects.filter(
+                    report=report_db,
+                    page_num=page_num
+                ).order_by('-id').first()
+
+                if extracted and extracted.selection is None:
+                    extracted.selection = selection
+                    extracted.save(update_fields=['selection'])
+
+                log.output("INFO", f"Page {page_num}: cached {len(all_variants)} variants, selection_id={selection.id}")
+
     # testing camelot parsing report
     # ==============================
     acc_total = 0
@@ -818,11 +946,13 @@ def extract(file_path: str, start_page: int, end_page: int,
 
     # collect total accuracy and count cases
     for report in report_list:
-        count += 1
-        acc_total += report[0]["accuracy"]
+        if isinstance(report, list) and len(report) > 0:
+            count += 1
+            acc_total += report[0].get("accuracy", 0)
 
-    # empty list
+    # empty lists
     report_list.clear()
+    variants_list.clear()
 
     # get average accuracy and log to console
     if count > 0:

@@ -412,12 +412,32 @@ def extract_from_selections(self, report_id):
 
         for i, selection in enumerate(all_selections):
             page_num = selection.page_num
-            progress = 10 + int(80 * (i / total_selections))
-            self.update_state(state='PROGRESS', meta={
-                'current': progress,
-                'total': 100,
-                'status': f'Extracting table from page {page_num} (selection {i + 1}/{total_selections})...'
-            })
+
+            # Create progress callback for detailed method-level updates
+            # Map technical method names to user-friendly descriptions
+            method_descriptions = {
+                'camelot_lattice': 'Detecting table borders',
+                'camelot_stream': 'Analyzing whitespace layout',
+                'pdfplumber': 'Scanning PDF structure',
+                'pdfplumber_text': 'Extracting text patterns',
+                'pymupdf': 'Processing document layers',
+                'pymupdf_text': 'Reading text alignment',
+                'img2table': 'Running visual recognition',
+            }
+
+            def make_progress_callback(sel_idx, sel_total):
+                def callback(method_name, method_idx, method_total):
+                    # Progress: 10-90% range, split between selections and methods
+                    base = 10 + int(80 * sel_idx / sel_total)
+                    method_increment = int(80 / sel_total * method_idx / method_total)
+                    progress = base + method_increment
+                    description = method_descriptions.get(method_name, method_name)
+                    self.update_state(state='PROGRESS', meta={
+                        'current': progress,
+                        'total': 100,
+                        'message': f'Table {sel_idx + 1}/{sel_total}: {description} (method {method_idx}/{method_total})'
+                    })
+                return callback
 
             # Get the table area for this selection
             with fitz.open(file_path) as pdf_doc:
@@ -438,7 +458,8 @@ def extract_from_selections(self, report_id):
                 all_variants = multi_extractor.extract_all_with_scores(
                     pdf_path=file_path,
                     page_num=page_num,
-                    table_areas=[table_area]
+                    table_areas=[table_area],
+                    progress_callback=make_progress_callback(i, total_selections)
                 )
 
                 # Filter out failed/empty results for display but keep them in cache

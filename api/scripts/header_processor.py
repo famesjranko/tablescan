@@ -5,6 +5,51 @@ header_processor.py
 
 import pandas as pd
 import numpy as np
+import re
+
+
+# Pattern to detect numeric/data values (not headers)
+# Matches: 34.5%, 1199 sec, n=1, 98.3% n=2, (97.7%, n=3), 1672.1 sec, n=4, etc.
+_NUMERIC_DATA_PATTERN = re.compile(
+    r'^[\s\(\[]*'  # Optional leading whitespace, parens, brackets
+    r'[\d,.$€£¥]+'  # Must start with digits or currency
+    r'[\d,.\s%]*'  # More digits, decimals, spaces, percent
+    r'(?:'  # Optional suffix group
+        r'(?:sec|ms|min|hr|n\s*=\s*\d+|%|[a-z]{1,3})'  # Units or n=X
+        r'[\s,]*'
+    r')*'
+    r'[\s\)\]]*$',  # Optional trailing whitespace, parens
+    re.IGNORECASE
+)
+
+# Pattern for cells that are clearly labels/headers
+_HEADER_LABEL_PATTERN = re.compile(
+    r'^[A-Za-z][A-Za-z\s\-_/]+$'  # Starts with letter, mostly letters
+)
+
+
+def _is_numeric_data_cell(cell_str: str) -> bool:
+    """Check if a cell contains numeric data (not a header label)."""
+    if not cell_str:
+        return False
+
+    # Quick check: if it starts with a digit or currency, likely numeric
+    if cell_str[0].isdigit() or cell_str[0] in '$€£¥(':
+        return True
+
+    # Check against numeric pattern
+    if _NUMERIC_DATA_PATTERN.match(cell_str):
+        return True
+
+    # Check for percentage or number anywhere with few letters
+    digits = sum(1 for c in cell_str if c.isdigit())
+    letters = sum(1 for c in cell_str if c.isalpha())
+
+    # If more digits than letters, it's probably data
+    if digits > 0 and digits >= letters:
+        return True
+
+    return False
 
 
 def is_likely_header_row(row: pd.Series) -> bool:
@@ -12,7 +57,7 @@ def is_likely_header_row(row: pd.Series) -> bool:
     Determine if a row is likely part of a header based on its characteristics.
 
     Header rows typically:
-    - Contain mostly text (not numeric values)
+    - Contain mostly text labels (not numeric values)
     - May have some empty cells due to merged cell spans
     - Have short text values (column names, not data)
 
@@ -32,14 +77,12 @@ def is_likely_header_row(row: pd.Series) -> bool:
 
     for cell in row:
         cell_str = str(cell).strip()
-        if not cell_str:
+        if not cell_str or cell_str.lower() == 'nan':
             empty_count += 1
             continue
 
-        # Check if cell is purely numeric (data row indicator)
-        cleaned = cell_str.replace(',', '').replace('%', '').replace('.', '')
-        cleaned = cleaned.replace('n=', '').replace('sec', '').strip()
-        if cleaned.isdigit():
+        # Use improved numeric detection
+        if _is_numeric_data_cell(cell_str):
             numeric_count += 1
         else:
             text_count += 1
@@ -54,9 +97,9 @@ def is_likely_header_row(row: pd.Series) -> bool:
 
     text_ratio = text_count / total_content
 
-    # Header rows have mostly text (>= 60%)
-    # Data rows have mostly numbers
-    return text_ratio >= 0.6
+    # Header rows have mostly text (>= 70% - raised from 60%)
+    # Also require at least 2 text cells to avoid false positives
+    return text_ratio >= 0.70 and text_count >= 2
 
 
 def detect_header_rows(df: pd.DataFrame, max_header_rows: int = 4) -> int:

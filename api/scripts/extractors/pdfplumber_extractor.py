@@ -127,14 +127,25 @@ class PdfplumberExtractor(BaseExtractor):
 
                 # Extract from specific areas
                 for i, (x1, y1, x2, y2) in enumerate(table_areas):
-                    # Convert from PDF coordinates (origin bottom-left, y increases up)
-                    # to pdfplumber coordinates (origin top-left, y increases down)
-                    # PDF y1 = top (higher value) → plumber top (lower value)
-                    # PDF y2 = bottom (lower value) → plumber bottom (higher value)
-                    page_height = page.height
-                    plumber_top = page_height - y1
-                    plumber_bottom = page_height - y2
-                    plumber_bbox = (x1, plumber_top, x2, plumber_bottom)
+                    # Use BoundingBox for coordinate conversion
+                    # Input is from bboxes_pdf: y1=top (high), y2=bottom (low) in PDF coords
+                    from .base import BoundingBox
+                    bbox = BoundingBox.from_pdf_coords(
+                        x1, y1, x2, y2,
+                        page_width=page.width,
+                        page_height=page.height
+                    )
+                    plumber_bbox = bbox.to_pdfplumber()
+
+                    # Validate bbox before cropping
+                    px1, ptop, px2, pbottom = plumber_bbox
+                    if ptop >= pbottom or px1 >= px2:
+                        logger.warning(
+                            f"[{self.name}] Invalid bbox after conversion: {plumber_bbox}, "
+                            f"original: ({x1}, {y1}, {x2}, {y2})"
+                        )
+                        continue
+
                     cropped = page.within_bbox(plumber_bbox)
                     tables = cropped.extract_tables(table_settings)
 

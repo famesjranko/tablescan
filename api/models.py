@@ -223,6 +223,7 @@ class TableSelection(models.Model):
     SOURCE_CHOICES = (
         ("yolo", "YOLO Detection"),
         ("manual", "Manual Selection"),
+        ("auto", "Automatic Extraction"),
     )
 
     STATUS_CHOICES = (
