@@ -23,6 +23,7 @@ from api.views import (
     DownloadAllCSVView,
     UploadAsyncView,
     TaskStatusView,
+    BookViewerView,
 )
 
 
@@ -43,6 +44,7 @@ urlpatterns = [
     path("reports/", ReportsListView.as_view(), name="reports_list"),
     path("reports/<int:pk>/", ReportDetailView.as_view(), name="report_detail"),
     path("reports/<int:pk>/delete/", ReportDeleteView.as_view(), name="report_delete"),
+    path("reports/<int:pk>/viewer/", BookViewerView.as_view(), name="book_viewer"),
 
     # AJAX/API endpoints for frontend
     path("upload-async/", UploadAsyncView.as_view(), name="upload_async"),

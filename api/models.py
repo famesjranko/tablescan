@@ -16,6 +16,7 @@ import os
 from django.db import models
 from django.db.models.deletion import SET_DEFAULT
 from django.contrib.auth.models import User
+from django.core.validators import MinValueValidator
 
 from django.utils.encoding import force_str
 import re
@@ -77,6 +78,21 @@ class Report(models.Model):
     Report database Class Model
     """
 
+    EXTRACTION_MODE_CHOICES = (
+        ("auto", "Automatic"),
+        ("manual", "Manual"),
+        ("review", "Review"),
+    )
+
+    EXTRACTION_STATUS_CHOICES = (
+        ("uploaded", "Uploaded"),
+        ("detecting", "Detecting"),
+        ("pending_review", "Pending Review"),
+        ("extracting", "Extracting"),
+        ("completed", "Completed"),
+        ("failed", "Failed"),
+    )
+
     name = models.CharField(max_length=100, null=True)
     document = models.FileField(storage=MyStorage(), upload_to=upload_path)
     zip_csv = models.FileField(null=True)
@@ -84,6 +100,18 @@ class Report(models.Model):
     total_pages = models.PositiveIntegerField(null=True, blank=True)
     start_page = models.IntegerField(default=1)
     end_page = models.IntegerField(default=-1)
+    extraction_mode = models.CharField(
+        max_length=10,
+        choices=EXTRACTION_MODE_CHOICES,
+        default="auto",
+        help_text="Extraction workflow: auto, manual, or review",
+    )
+    extraction_status = models.CharField(
+        max_length=20,
+        choices=EXTRACTION_STATUS_CHOICES,
+        default="uploaded",
+        help_text="Current processing state of the report",
+    )
     owner = models.ForeignKey(
         User,
         on_delete=models.CASCADE,
@@ -196,3 +224,68 @@ class Extracted(models.Model):
 
     class Meta:
         ordering = ["page_num", "table_num", "f_type"]
+
+
+class TableSelection(models.Model):
+    """
+    Stores table region selections (auto-detected or manual) with approval status.
+    Coordinates are in percentage (0-100), top-left origin for frontend display.
+    PDF coordinate conversion happens at extraction time in tasks.py.
+    """
+
+    SOURCE_CHOICES = (
+        ("yolo", "YOLO Detection"),
+        ("manual", "Manual Selection"),
+    )
+
+    STATUS_CHOICES = (
+        ("pending", "Pending Review"),
+        ("approved", "Approved"),
+        ("rejected", "Rejected"),
+        ("failed", "Failed"),
+    )
+
+    report = models.ForeignKey(
+        Report,
+        related_name="selections",
+        on_delete=models.CASCADE,
+    )
+    page_num = models.PositiveIntegerField()
+    x1 = models.FloatField(
+        validators=[MinValueValidator(0.0)],
+        help_text="Left edge X coordinate (0-100%, top-left origin)"
+    )
+    y1 = models.FloatField(
+        validators=[MinValueValidator(0.0)],
+        help_text="Top edge Y coordinate (0-100%, top-left origin)"
+    )
+    x2 = models.FloatField(
+        validators=[MinValueValidator(0.0)],
+        help_text="Right edge X coordinate (0-100%, top-left origin)"
+    )
+    y2 = models.FloatField(
+        validators=[MinValueValidator(0.0)],
+        help_text="Bottom edge Y coordinate (0-100%, top-left origin)"
+    )
+    confidence = models.FloatField(
+        null=True,
+        blank=True,
+        help_text="YOLO detection confidence (0.0 to 1.0)",
+    )
+    source = models.CharField(
+        max_length=10,
+        choices=SOURCE_CHOICES,
+        default="manual",
+    )
+    status = models.CharField(
+        max_length=10,
+        choices=STATUS_CHOICES,
+        default="pending",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"TableSelection {self.id}: page {self.page_num} ({self.source}, {self.status})"
+
+    class Meta:
+        ordering = ["page_num", "created_at"]

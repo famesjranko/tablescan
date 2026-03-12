@@ -100,10 +100,69 @@ def export_to_xlsx(
     if structure_json and "cells" in structure_json:
         _apply_cell_spans(ws, structure_json["cells"], header_rows, header_font, header_fill, header_alignment)
 
+    # Apply hierarchical header merges if header_spans available
+    if structure_json and "header_spans" in structure_json:
+        _apply_header_spans(ws, structure_json["header_spans"], header_font, header_fill, header_alignment)
+
     # Save workbook
     wb.save(output_path)
 
     return output_path
+
+
+def _apply_header_spans(
+    ws,
+    header_spans: list,
+    header_font: Font,
+    header_fill: PatternFill,
+    header_alignment: Alignment
+) -> None:
+    """
+    Apply merged cells for hierarchical headers based on header_spans.
+
+    This creates merged cells for headers that span multiple columns (colspan)
+    or multiple rows (rowspan), preserving the visual hierarchy from the PDF.
+
+    Args:
+        ws: openpyxl worksheet
+        header_spans: List of span dicts with row, col, value, colspan, rowspan
+        header_font: Font style for headers
+        header_fill: Fill style for headers
+        header_alignment: Alignment for headers
+    """
+    thin_border = Border(
+        left=Side(style="thin"),
+        right=Side(style="thin"),
+        top=Side(style="thin"),
+        bottom=Side(style="thin")
+    )
+
+    for span in header_spans:
+        colspan = span.get("colspan", 1)
+        rowspan = span.get("rowspan", 1)
+
+        if colspan > 1 or rowspan > 1:
+            # Convert 0-indexed to 1-indexed for openpyxl
+            start_row = span["row"] + 1
+            start_col = span["col"] + 1
+            end_row = start_row + rowspan - 1
+            end_col = start_col + colspan - 1
+
+            # Merge cells
+            ws.merge_cells(
+                start_row=start_row,
+                start_column=start_col,
+                end_row=end_row,
+                end_column=end_col
+            )
+
+            # Re-apply formatting to merged cell
+            merged_cell = ws.cell(row=start_row, column=start_col)
+            merged_cell.value = span.get("value", "")
+            merged_cell.font = header_font
+            merged_cell.fill = header_fill
+            merged_cell.alignment = header_alignment
+            merged_cell.border = thin_border
 
 
 def _apply_cell_spans(

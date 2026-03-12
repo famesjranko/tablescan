@@ -141,11 +141,12 @@ def norm_bbox(img, bbox, x_corr=0.02, y_corr=0.02):
     h_corr = h_img_norm * y_corr
 
     # Small symmetric margins - just enough for table borders
+    # Clip to valid range [0, 1.0] to keep boxes within page boundaries
     return [
-        x1_img_norm - w_corr,
-        y1_img_norm - h_corr,
-        x2_img_norm + w_corr,
-        y2_img_norm + h_corr,
+        max(0.0, min(1.0, x1_img_norm - w_corr)),
+        max(0.0, min(1.0, y1_img_norm - h_corr)),
+        max(0.0, min(1.0, x2_img_norm + w_corr)),
+        max(0.0, min(1.0, y2_img_norm + h_corr)),
     ]
 
 
@@ -359,10 +360,11 @@ def detect_tables(file_path, page_number, output_type, report_db, extract_dir,
         table = strip_empty_rows_and_cols(table)
 
         # Process headers if enabled
+        header_spans = []
         if merge_headers:
-            table = process_table_headers(table, merge_headers=True)
+            table, header_spans = process_table_headers(table, merge_headers=True)
 
-        processed_tables.append(table)
+        processed_tables.append((table, header_spans))
 
     output_camelot = processed_tables
 
@@ -388,7 +390,7 @@ def detect_tables(file_path, page_number, output_type, report_db, extract_dir,
                 'y1': float(coords[3])
             })
 
-    for i, db in enumerate(output_camelot):
+    for i, (db, header_spans) in enumerate(output_camelot):
         # log.output('SUCCESS', f'found table: page {pg}, table {i}')
 
         # Get bounding box for this table (if available)
@@ -396,6 +398,10 @@ def detect_tables(file_path, page_number, output_type, report_db, extract_dir,
 
         # Build structure_json from DataFrame
         structure = build_structure_json(db)
+
+        # Add header spans for hierarchical header rendering
+        if header_spans:
+            structure['header_spans'] = header_spans
 
         # Get confidence from parsing report (if available)
         confidence = None
@@ -414,7 +420,7 @@ def detect_tables(file_path, page_number, output_type, report_db, extract_dir,
                 db.to_json(str(e_path), orient="columns")
             elif key == "xlsx":
                 # Export to XLSX with cell spans and header formatting (US-018)
-                export_to_xlsx(db, str(e_path), structure_json=structure, header_rows=1)
+                export_to_xlsx(db, str(e_path), structure_json=structure, header_rows=len(header_spans) + 1 if header_spans else 1)
 
             # build cleaned path for database
             db_path = PurePath(PurePath(e_path).parts[-3], key, PurePath(e_path).name)
@@ -443,8 +449,6 @@ def detect_tables(file_path, page_number, output_type, report_db, extract_dir,
 
 
 def extract_tables_direct_readonly(file_path: str, page_number: int,
-                                   flavor: str = 'auto', row_tol: int = 2,
-                                   strip_text: str = '\n',
                                    merge_headers: bool = True) -> List[ExtractionResult]:
     """
     Extract tables directly using multiple extractors without saving.
@@ -460,9 +464,6 @@ def extract_tables_direct_readonly(file_path: str, page_number: int,
     Args:
         file_path: Path to PDF file
         page_number: Page number to process
-        flavor: Camelot flavor ('auto', 'lattice', or 'stream') - used for fallback
-        row_tol: Row tolerance for Camelot parsing
-        strip_text: Characters to strip from cell text
         merge_headers: Whether to merge fragmented multi-row headers
 
     Returns:
@@ -512,8 +513,9 @@ def extract_tables_direct_readonly(file_path: str, page_number: int,
         table = table.fillna("")
         table = strip_empty_rows_and_cols(table)
 
+        header_spans = []
         if merge_headers:
-            table = process_table_headers(table, merge_headers=True)
+            table, header_spans = process_table_headers(table, merge_headers=True)
 
         # Validate table
         if not tableValidate(table):
@@ -527,9 +529,14 @@ def extract_tables_direct_readonly(file_path: str, page_number: int,
         # Build structure_json from processed DataFrame
         structure = build_structure_json(table, result.metadata if result.metadata else None)
 
+        # Add header spans for hierarchical header rendering
+        if header_spans:
+            structure['header_spans'] = header_spans
+
         # Create new ExtractionResult with processed data and enriched metadata
         enriched_metadata = dict(result.metadata) if result.metadata else {}
         enriched_metadata['structure_json'] = structure
+        enriched_metadata['header_spans'] = header_spans
         enriched_metadata['parsing_report'] = {
             'accuracy': result.confidence * 100,
             'whitespace': result.metadata.get('parsing_report', {}).get('whitespace', 0) if result.metadata else 0,
@@ -617,8 +624,9 @@ def extract_tables_vision_readonly(file_path: str, page_number: int,
         table = table.fillna("")
         table = strip_empty_rows_and_cols(table)
 
+        header_spans = []
         if merge_headers:
-            table = process_table_headers(table, merge_headers=True)
+            table, header_spans = process_table_headers(table, merge_headers=True)
 
         # Validate table
         if not tableValidate(table):
@@ -632,9 +640,14 @@ def extract_tables_vision_readonly(file_path: str, page_number: int,
         # Build structure_json from processed DataFrame
         structure = build_structure_json(table, result.metadata if result.metadata else None)
 
+        # Add header spans for hierarchical header rendering
+        if header_spans:
+            structure['header_spans'] = header_spans
+
         # Create new ExtractionResult with processed data and enriched metadata
         enriched_metadata = dict(result.metadata) if result.metadata else {}
         enriched_metadata['structure_json'] = structure
+        enriched_metadata['header_spans'] = header_spans
         enriched_metadata['computed_score'] = score
         enriched_metadata['parsing_report'] = {
             'accuracy': result.confidence * 100,
@@ -700,6 +713,11 @@ def save_extraction_results(results: List[ExtractionResult], file_path: str,
         # Build structure_json if not present in metadata
         if structure is None:
             structure = build_structure_json(result.dataframe, result.metadata)
+
+        # Add header_spans to structure if present in metadata
+        header_spans = result.metadata.get('header_spans') if result.metadata else None
+        if header_spans and structure:
+            structure['header_spans'] = header_spans
 
         # Build parsing report for return value
         parsing_report = result.metadata.get('parsing_report', {}) if result.metadata else {}
@@ -800,9 +818,6 @@ def extract_tables_direct(file_path: str, page_number: int, output_type: str,
     results = extract_tables_direct_readonly(
         file_path=file_path,
         page_number=page_number,
-        flavor=flavor,
-        row_tol=row_tol,
-        strip_text=strip_text,
         merge_headers=merge_headers
     )
 
@@ -822,6 +837,234 @@ def extract_tables_direct(file_path: str, page_number: int, output_type: str,
 
 
 # %%
+
+
+def detect_table_regions(file_path: str, page_number: int) -> List[dict]:
+    """
+    Detect table regions in a PDF page using YOLO without extracting tables.
+
+    This function performs YOLO inference to detect table bounding boxes but does NOT:
+    - Call Camelot to extract table content
+    - Save anything to the database
+    - Create CSV/JSON/XLSX files
+
+    Used by the book viewer to get initial table detections for user review.
+
+    Args:
+        file_path: Path to PDF file
+        page_number: Page number to process (1-indexed)
+
+    Returns:
+        List of dicts with keys: x1, y1, x2, y2, confidence
+        Coordinates are in percentage (0-100), top-left origin (same as manual selections)
+        PDF coordinate conversion happens at extraction time in tasks.py
+    """
+    pdf_file = file_path
+    pg = page_number
+
+    # Image conversion
+    img_path = pdf_file[:-4] + "-" + str(pg) + ".jpg"
+    pdf_page = norm_pdf_page(pdf_file, pg)
+    img = pdf_page2img(pdf_file, pg, save_image=True)
+
+    # YOLO inference
+    opt = parameters(img_path)
+    output_detect = detectTable(opt)
+    output = outpout_yolo(output_detect)
+
+    # Cleanup temp image file
+    try:
+        Path.unlink(Path(img_path))
+    except FileNotFoundError:
+        pass  # Already cleaned up
+
+    # Convert bboxes to percentage coordinates (0-100) for frontend display
+    # Frontend uses top-left origin like image coordinates
+    # PDF coordinate conversion happens at extraction time (in tasks.py)
+    regions = []
+    for bbox in output:
+        # bbox format: [x1, y1, x2, y2, class, confidence]
+        # confidence is at index 5
+        confidence = bbox[5] if len(bbox) > 5 else None
+
+        # Get normalized image coordinates (0-1 range, top-left origin)
+        [x1_norm, y1_norm, x2_norm, y2_norm] = norm_bbox(img, bbox)
+
+        # Convert to percentage (0-100) - same coordinate system as manual selections
+        # y coordinates remain as-is since both image and screen use top-left origin
+        regions.append({
+            'x1': x1_norm * 100,
+            'y1': y1_norm * 100,
+            'x2': x2_norm * 100,
+            'y2': y2_norm * 100,
+            'confidence': confidence,
+        })
+
+    return regions
+
+
+def _boxes_overlap(box1: tuple, box2: tuple, threshold: float = 0.3) -> bool:
+    """
+    Check if two bounding boxes overlap significantly.
+
+    Args:
+        box1: (x1, y1, x2, y2) first box in PDF coordinates
+        box2: (x1, y1, x2, y2) second box in PDF coordinates
+        threshold: Minimum IoU (intersection over union) to consider as overlap
+
+    Returns:
+        True if boxes overlap above threshold
+    """
+    # Normalize coordinates (ensure x1 < x2 and handle y-flip)
+    ax1, ay1, ax2, ay2 = box1
+    bx1, by1, bx2, by2 = box2
+
+    # Ensure proper ordering
+    ax1, ax2 = min(ax1, ax2), max(ax1, ax2)
+    ay1, ay2 = min(ay1, ay2), max(ay1, ay2)
+    bx1, bx2 = min(bx1, bx2), max(bx1, bx2)
+    by1, by2 = min(by1, by2), max(by1, by2)
+
+    # Calculate intersection
+    ix1 = max(ax1, bx1)
+    iy1 = max(ay1, by1)
+    ix2 = min(ax2, bx2)
+    iy2 = min(ay2, by2)
+
+    if ix1 >= ix2 or iy1 >= iy2:
+        return False  # No intersection
+
+    intersection = (ix2 - ix1) * (iy2 - iy1)
+    area_a = (ax2 - ax1) * (ay2 - ay1)
+    area_b = (bx2 - bx1) * (by2 - by1)
+    union = area_a + area_b - intersection
+
+    if union <= 0:
+        return False
+
+    iou = intersection / union
+    return iou >= threshold
+
+
+def extract_from_manual_areas(
+    pdf_path: str,
+    page_num: int,
+    table_areas: List[tuple],
+    flavor: str = 'auto',
+    row_tol: int = 2,
+    strip_text: str = '\n',
+    merge_headers: bool = True
+) -> List[ExtractionResult]:
+    """
+    Extract tables from manually specified areas using MultiExtractor.
+
+    Uses the same multi-extractor pipeline as auto extraction (Camelot lattice,
+    Camelot stream, pdfplumber) with ExtractionScorer to select the best result.
+
+    Unlike passing table_areas directly to extractors (which constrains extraction
+    too tightly and can clip headers), this function lets MultiExtractor auto-detect
+    tables on the page, then filters results to only include tables that overlap
+    with the user's selection areas.
+
+    Args:
+        pdf_path: Path to PDF file
+        page_num: Page number (1-indexed)
+        table_areas: List of (x1, y1, x2, y2) tuples in PDF coordinates
+        flavor: Unused, kept for backward compatibility
+        row_tol: Unused, kept for backward compatibility
+        strip_text: Unused, kept for backward compatibility
+        merge_headers: Whether to merge fragmented headers
+
+    Returns:
+        List of ExtractionResult objects
+    """
+    log = Logging()
+
+    # Use MultiExtractor with auto-detection (no table_areas constraint)
+    # This matches the auto extraction flow and produces better quality results
+    # We then filter to only tables that overlap with user's selection
+    multi_extractor = MultiExtractor()
+
+    try:
+        best_results, comparison = multi_extractor.extract_with_comparison(
+            pdf_path, page_num, table_areas=None
+        )
+        extractors_summary = [f"{e['name']}:{e['tables_found']}" for e in comparison.get("extractors_run", [])]
+        log.output('INFO', f'Manual extraction - MultiExtractor ran: {", ".join(extractors_summary)}')
+    except Exception as e:
+        log.output('WARNING', f'MultiExtractor failed: {e}')
+        best_results = []
+
+    # Filter results to only tables that overlap with user's selection areas
+    filtered_results = []
+    for result in best_results:
+        # Get table bounding box from metadata
+        table_bbox = None
+        if result.metadata:
+            # Try different metadata keys that might contain bbox
+            if 'bbox' in result.metadata:
+                table_bbox = result.metadata['bbox']
+            elif '_bbox' in result.metadata:
+                table_bbox = result.metadata['_bbox']
+
+        # Check if table overlaps with any user selection
+        overlaps = False
+        if table_bbox:
+            for sel_area in table_areas:
+                if _boxes_overlap(table_bbox, sel_area, threshold=0.2):
+                    overlaps = True
+                    break
+        else:
+            # No bbox in metadata - assume it overlaps (single table on page)
+            overlaps = len(best_results) == 1
+
+        if overlaps:
+            filtered_results.append(result)
+
+    log.output('INFO', f'Manual extraction - filtered {len(filtered_results)}/{len(best_results)} tables by selection overlap')
+
+    # If filtering removed all results, fall back to constrained extraction
+    if not filtered_results and best_results:
+        log.output('INFO', 'Manual extraction - no overlap found, trying constrained extraction')
+        try:
+            filtered_results, _ = multi_extractor.extract_with_comparison(
+                pdf_path, page_num, table_areas=table_areas
+            )
+        except Exception as e:
+            log.output('WARNING', f'Constrained extraction also failed: {e}')
+            filtered_results = []
+
+    # Process results
+    results = []
+    for i, result in enumerate(filtered_results):
+        df = result.dataframe.fillna("")
+        df = strip_empty_rows_and_cols(df)
+
+        if not tableValidate(df):
+            continue
+
+        header_spans = []
+        if merge_headers:
+            df, header_spans = process_table_headers(df, merge_headers=True)
+
+        # Enrich metadata with manual selection info
+        metadata = result.metadata.copy() if result.metadata else {}
+        metadata.update({
+            'table_index': i,
+            'page_num': page_num,
+            'source': 'manual_selection',
+            'header_spans': header_spans,
+        })
+
+        results.append(ExtractionResult(
+            dataframe=df,
+            confidence=result.confidence,
+            method=result.method,
+            metadata=metadata
+        ))
+
+    log.output('INFO', f'Manual extraction: {len(results)} table(s)')
+    return results
 
 
 def extract_tables_vision(file_path: str, page_number: int, output_type: str,

@@ -22,8 +22,10 @@ from rest_framework.views import APIView
 from rest_framework import viewsets
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.decorators import action
 
 from django_filters.rest_framework import DjangoFilterBackend
+from django.db.models import Count, Q
 
 from .permissions import IsReportOwner
 
@@ -33,9 +35,10 @@ from django.conf import settings
 from .throttles import UploadRateThrottle, BurstRateThrottle
 
 from .serializers import *
-from .models import Extracted, Report
+from .models import Extracted, Report, TableSelection
 from api.scripts import table_extract
 from api.scripts.logging import Logging
+import fitz  # PyMuPDF
 
 from pathlib import Path, PurePath
 import datetime as date
@@ -82,6 +85,7 @@ class ReportViewSet(viewsets.ModelViewSet):
     Update part of report:          PATCH   api/reports/{id}/
     Remove report by id:            DELETE  api/reports/{id}/
     Remove report by name:          DELETE  api/reports/?name=
+    Get PDF metadata:               GET     api/reports/{id}/metadata/
     """
 
     queryset = Report.objects.all()
@@ -92,6 +96,85 @@ class ReportViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         return Report.objects.filter(owner=self.request.user)
+
+    @action(detail=True, methods=['post'], url_path='extract-selections')
+    def extract_selections(self, request, pk=None):
+        """
+        Trigger extraction from approved TableSelection regions.
+
+        POST /api/reports/{id}/extract-selections/
+        Returns {task_id, status} for polling via /task-status/<task_id>/
+        """
+        from api.tasks import extract_from_selections
+
+        report = self.get_object()
+
+        # Check if there are any approved selections
+        approved_count = report.selections.filter(status='approved').count()
+        if approved_count == 0:
+            return Response(
+                {'error': 'No approved selections to extract'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Queue extraction task
+        task = extract_from_selections.delay(report.id)
+
+        return Response({
+            'task_id': task.id,
+            'status': 'queued',
+            'approved_selections': approved_count
+        })
+
+    @action(detail=True, methods=['get'])
+    def metadata(self, request, pk=None):
+        """
+        Get PDF page count and dimensions for viewer initialization.
+        Returns {total_pages, pages: [{page_num, width, height, rotation}, ...]}
+        """
+        report = self.get_object()
+
+        if not report.document:
+            return Response(
+                {'error': 'No document attached to this report'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            doc = fitz.open(report.document.path)
+        except Exception as e:
+            return Response(
+                {'error': f'Failed to open PDF: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+        try:
+            pages = []
+            for page_num in range(len(doc)):
+                page = doc[page_num]
+                rotation = page.rotation
+
+                # Get dimensions from media box
+                width = page.rect.width
+                height = page.rect.height
+
+                # Swap width/height for 90 or 270 degree rotation
+                if rotation in (90, 270):
+                    width, height = height, width
+
+                pages.append({
+                    'page_num': page_num + 1,  # 1-indexed for user-facing API
+                    'width': round(width, 2),
+                    'height': round(height, 2),
+                    'rotation': rotation
+                })
+
+            return Response({
+                'total_pages': len(doc),
+                'pages': pages
+            })
+        finally:
+            doc.close()
 
 
 class ExtractedViewSet(viewsets.ModelViewSet):
@@ -114,6 +197,101 @@ class ExtractedViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         return Extracted.objects.filter(report__owner=self.request.user)
+
+
+class TableSelectionViewSet(viewsets.ModelViewSet):
+    """
+    Nested viewset for TableSelection CRUD operations.
+
+    List selections for a report:       GET     api/reports/{id}/selections/
+    Filter by page:                     GET     api/reports/{id}/selections/?page_num=1
+    Filter by status:                   GET     api/reports/{id}/selections/?status=pending,approved
+    Create selection:                   POST    api/reports/{id}/selections/
+    Update selection status:            PATCH   api/reports/{id}/selections/{sel_id}/
+    Delete selection:                   DELETE  api/reports/{id}/selections/{sel_id}/
+    """
+
+    serializer_class = TableSelectionSerializer
+    permission_classes = [IsAuthenticated]
+    http_method_names = ['get', 'post', 'patch', 'delete', 'head', 'options']
+
+    def get_report(self):
+        """Get the parent report, ensuring ownership."""
+        report_pk = self.kwargs.get('report_pk')
+        try:
+            report = Report.objects.get(pk=report_pk, owner=self.request.user)
+        except Report.DoesNotExist:
+            from rest_framework.exceptions import NotFound
+            raise NotFound("Report not found.")
+        return report
+
+    def get_queryset(self):
+        """Return selections for the specific report with optional filtering."""
+        report = self.get_report()
+        queryset = TableSelection.objects.filter(report=report)
+
+        # Filter by page_num if provided
+        page_num = self.request.query_params.get('page_num')
+        if page_num:
+            try:
+                queryset = queryset.filter(page_num=int(page_num))
+            except ValueError:
+                pass
+
+        # Filter by status if provided (comma-separated)
+        status_param = self.request.query_params.get('status')
+        if status_param:
+            statuses = [s.strip() for s in status_param.split(',') if s.strip()]
+            if statuses:
+                queryset = queryset.filter(status__in=statuses)
+
+        return queryset
+
+    def get_object(self):
+        """Get selection ensuring it belongs to the report."""
+        report = self.get_report()
+        sel_id = self.kwargs.get('pk')
+        try:
+            selection = TableSelection.objects.get(pk=sel_id, report=report)
+        except TableSelection.DoesNotExist:
+            from rest_framework.exceptions import NotFound
+            raise NotFound("Selection not found.")
+        return selection
+
+    def get_serializer_context(self):
+        """Add report to serializer context for validation."""
+        context = super().get_serializer_context()
+        if 'report_pk' in self.kwargs:
+            context['report'] = self.get_report()
+        return context
+
+    def perform_create(self, serializer):
+        """Set report from URL when creating a selection."""
+        report = self.get_report()
+        serializer.save(report=report)
+
+    def partial_update(self, request, *args, **kwargs):
+        """PATCH: Only allow updating the status field."""
+        allowed_fields = {'status'}
+        request_fields = set(request.data.keys())
+        disallowed = request_fields - allowed_fields
+
+        if disallowed:
+            return Response(
+                {'error': f"Only 'status' field can be updated. Disallowed fields: {list(disallowed)}"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Validate status value
+        if 'status' in request.data:
+            valid_statuses = [choice[0] for choice in TableSelection.STATUS_CHOICES]
+            if request.data['status'] not in valid_statuses:
+                return Response(
+                    {'error': f"Invalid status. Must be one of: {valid_statuses}"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+        return super().partial_update(request, *args, **kwargs)
 
 
 class UploadView(APIView):
@@ -252,14 +430,15 @@ class ReportsListView(LoginRequiredMixin, ListView):
         search = self.request.GET.get('search', '')
         if search:
             queryset = queryset.filter(name__icontains=search)
+        # Annotate with table count to avoid N+1 queries
+        queryset = queryset.annotate(
+            table_count=Count('extracted', filter=Q(extracted__f_type='csv'))
+        )
         return queryset
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context['search_query'] = self.request.GET.get('search', '')
-        # Add table count to each report
-        for report in context['reports']:
-            report.table_count = report.extracted.filter(f_type='csv').count()
         return context
 
 
@@ -312,7 +491,7 @@ class ReportDeleteView(View):
     """Delete a report and its extracted files"""
 
     def post(self, request, pk):
-        report = get_object_or_404(Report, pk=pk)
+        report = get_object_or_404(Report, pk=pk, owner=request.user)
         report_name = report.name
         report.delete()
         messages.success(request, f'Report "{report_name}" deleted successfully.')
@@ -323,7 +502,7 @@ class TablePreviewView(View):
     """AJAX endpoint to preview CSV table contents"""
 
     def get(self, request, pk):
-        extracted = get_object_or_404(Extracted, pk=pk)
+        extracted = get_object_or_404(Extracted, pk=pk, report__owner=request.user)
 
         if not extracted.file or extracted.f_type != 'csv':
             return JsonResponse({'error': 'No CSV file available'}, status=404)
@@ -340,11 +519,17 @@ class TablePreviewView(View):
             headers = rows[0] if rows else []
             data_rows = rows[1:max_rows + 1] if len(rows) > 1 else []
 
+            # Get header spans from structure_json if available
+            header_spans = None
+            if extracted.structure_json and 'header_spans' in extracted.structure_json:
+                header_spans = extracted.structure_json['header_spans']
+
             return JsonResponse({
                 'headers': headers,
                 'rows': data_rows,
                 'truncated': truncated,
-                'total_rows': len(rows) - 1
+                'total_rows': len(rows) - 1,
+                'header_spans': header_spans
             })
         except Exception as e:
             return JsonResponse({'error': str(e)}, status=500)
@@ -354,7 +539,7 @@ class DownloadAllCSVView(View):
     """Download all CSV files for a report as a ZIP"""
 
     def get(self, request, pk):
-        report = get_object_or_404(Report, pk=pk)
+        report = get_object_or_404(Report, pk=pk, owner=request.user)
         csv_files = report.extracted.filter(f_type='csv')
 
         if not csv_files.exists():
@@ -385,7 +570,7 @@ class UploadAsyncView(LoginRequiredMixin, View):
     """Async upload endpoint that queues extraction via Celery"""
 
     def post(self, request):
-        from api.tasks import extract_tables_task
+        from api.tasks import extract_tables_task, detect_tables_for_review
 
         # Apply rate limiting
         upload_throttle = UploadRateThrottle()
@@ -429,6 +614,7 @@ class UploadAsyncView(LoginRequiredMixin, View):
         row_tol = int(request.POST.get('row_tol', 2))
         strip_text = request.POST.get('strip_text', '\n')
         merge_headers = request.POST.get('merge_headers', 'on') == 'on'
+        extraction_mode = request.POST.get('extraction_mode', 'auto')
 
         # Create report using serializer
         report_serializer = ReportSerializer(
@@ -452,9 +638,20 @@ class UploadAsyncView(LoginRequiredMixin, View):
         file_name = full_path.name
         file_path = str(PurePath(settings.MEDIA_ROOT, base_dir, file_name))
 
-        # Update report with name and type
+        # Update report with name, type, and extraction mode
         report.name = base_dir
         report.f_type = file_name.split('.')[1]
+        report.extraction_mode = extraction_mode
+
+        # Get total page count for proper multi-page handling
+        try:
+            pdf_doc = fitz.open(file_path)
+            report.total_pages = len(pdf_doc)
+            pdf_doc.close()
+        except Exception:
+            # If we can't read pages, default to 1 (will be corrected during extraction)
+            report.total_pages = 1
+
         report.save()
 
         # Clean empty directories
@@ -464,23 +661,43 @@ class UploadAsyncView(LoginRequiredMixin, View):
             if len(os.listdir(path)) == 0:
                 Path.rmdir(Path(path))
 
-        # Queue extraction task with options
-        task = extract_tables_task.delay(
-            report.id,
-            file_path,
-            start_page,
-            end_page,
-            flavor=flavor,
-            row_tol=row_tol,
-            strip_text=strip_text,
-            merge_headers=merge_headers
-        )
+        # Handle different extraction modes
+        if extraction_mode == 'manual':
+            # Manual mode: set status and redirect immediately to viewer
+            report.extraction_status = 'pending_review'
+            report.save(update_fields=['extraction_status'])
+            return JsonResponse({
+                'report_id': report.id,
+                'status': 'ready',
+                'redirect_url': f'/reports/{report.id}/viewer/'
+            })
 
-        return JsonResponse({
-            'task_id': task.id,
-            'report_id': report.id,
-            'status': 'queued'
-        })
+        elif extraction_mode == 'review':
+            # Review mode: run detection task, then redirect to viewer
+            task = detect_tables_for_review.delay(report.id)
+            return JsonResponse({
+                'task_id': task.id,
+                'report_id': report.id,
+                'status': 'queued'
+            })
+
+        else:
+            # Auto mode (default): full extraction
+            task = extract_tables_task.delay(
+                report.id,
+                file_path,
+                start_page,
+                end_page,
+                flavor=flavor,
+                row_tol=row_tol,
+                strip_text=strip_text,
+                merge_headers=merge_headers
+            )
+            return JsonResponse({
+                'task_id': task.id,
+                'report_id': report.id,
+                'status': 'queued'
+            })
 
 
 class TaskStatusView(View):
@@ -502,3 +719,18 @@ class TaskStatusView(View):
             response_data['error'] = str(result.result)
 
         return JsonResponse(response_data)
+
+
+class BookViewerView(LoginRequiredMixin, View):
+    """Book viewer for manual table selection and review"""
+
+    def get(self, request, pk):
+        report = get_object_or_404(Report, pk=pk)
+
+        # Verify ownership
+        if report.owner != request.user:
+            return HttpResponse('Forbidden', status=403)
+
+        return render(request, 'reports/book_viewer.html', {
+            'report': report,
+        })

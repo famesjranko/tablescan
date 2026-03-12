@@ -28,6 +28,17 @@ router = routers.DefaultRouter()
 router.register(r"reports", views.ReportViewSet, basename='api-reports')
 router.register(r"extracted", views.ExtractedViewSet, basename='api-extracted')
 
+# Nested router for table selections under reports
+selections_list = views.TableSelectionViewSet.as_view({
+    'get': 'list',
+    'post': 'create'
+})
+selections_detail = views.TableSelectionViewSet.as_view({
+    'get': 'retrieve',
+    'patch': 'partial_update',
+    'delete': 'destroy'
+})
+
 # Authentication URL patterns
 auth_urlpatterns = [
     path('register/', RegisterView.as_view(), name='auth_register'),
@@ -41,6 +52,9 @@ api_urlpatterns = [
     path("", include(router.urls)),
     path("auth/", include(auth_urlpatterns)),
     re_path(r"^upload/$", UploadView.as_view(), name="api_upload"),
+    # Nested table selections endpoints
+    path("reports/<int:report_pk>/selections/", selections_list, name="report-selections-list"),
+    path("reports/<int:report_pk>/selections/<int:pk>/", selections_detail, name="report-selections-detail"),
 ]
 
 # For backwards compatibility, also export as urlpatterns

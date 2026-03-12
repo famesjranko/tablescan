@@ -1,0 +1,825 @@
+{% extends 'base.html' %}
+
+{% block title %}{{ report.name }} - Book Viewer{% endblock %}
+
+{% block extra_head %}
+<meta name="csrf-token" content="{{ csrf_token }}">
+{% load static %}
+<script>
+    // This runs BEFORE Alpine starts (synchronous, in head)
+    document.addEventListener('alpine:init', () => {
+        console.log('[BookViewer HEAD] alpine:init fired, registering component...');
+
+        Alpine.data('bookViewer', () => ({
+            // Will be populated by module script
+            _initialized: false,
+            loading: true,
+            error: null,
+            renderError: null,
+            renderingPages: false,
+            totalPages: 0,
+            currentSpread: 0,
+            leftPageNum: 0,
+            rightPageNum: 0,
+            zoom: 100,
+            mode: 'view',
+            gotoPageInput: '',
+            selections: [],
+            canvasReady: false,
+            hoveredSelectionId: null,
+            selectionStyleVersion: 0,
+            isDrawing: false,
+            drawingPage: null,
+            extracting: false,
+            extractProgress: null,
+            extractError: null,
+            partialSuccess: null,
+
+            // Stub methods - will be replaced by real implementation
+            init() { console.log('[BookViewer] Stub init'); },
+            getSpreadLabel() { return ''; },
+            hasNextSpread() { return false; },
+            getSelectionsForPage() { return []; },
+            getApprovedCount() { return 0; },
+            getEmptyStateMessage() { return 'Loading...'; },
+            getEmptyStateHint() { return ''; },
+            isYoloPending() { return false; },
+            getSelectionStyle() { return {}; },
+            getSelectionLabel() { return ''; },
+            setHoveredSelection() {},
+            getDrawingPreviewStyle() { return {}; },
+            zoomIn() {},
+            zoomOut() {},
+            prevSpread() {},
+            nextSpread() {},
+            goToPage() {},
+            goToPageFromInput() {},
+            handlePageInputKeydown() {},
+            startSelection() {},
+            updateSelection() {},
+            endSelection() {},
+            deleteSelection() {},
+            approveSelection() {},
+            rejectSelection() {},
+            startExtraction() {},
+            retryExtraction() {},
+            closeExtractionError() {},
+            dismissPartialSuccess() {},
+            renderSpread() {}
+        }));
+    });
+</script>
+<style>
+    .book-viewer-main {
+        max-width: 100%;
+    }
+    .page-container {
+        background: #e5e7eb;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 400px;
+        position: relative;
+    }
+    .page-container canvas {
+        max-width: 100%;
+        max-height: 100%;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+        background: white;
+    }
+    .selection-overlay {
+        position: absolute;
+        border: 2px solid #3B82F6;
+        background: rgba(59, 130, 246, 0.1);
+        pointer-events: auto;
+    }
+    .selection-overlay.pending {
+        border-color: #F59E0B;
+        background: rgba(245, 158, 11, 0.1);
+    }
+    .selection-overlay.approved {
+        border-color: #10B981;
+        background: rgba(16, 185, 129, 0.1);
+    }
+    .selection-overlay.rejected {
+        border-color: #EF4444;
+        background: rgba(239, 68, 68, 0.1);
+        opacity: 0.4;
+    }
+    .selection-overlay.failed {
+        border-color: #DC2626;
+        background: rgba(220, 38, 38, 0.15);
+        border-style: dashed;
+    }
+    .selection-overlay.preview {
+        border-style: dashed;
+        pointer-events: none;
+    }
+    /* Review controls on YOLO boxes */
+    .selection-overlay .review-controls {
+        position: absolute;
+        top: 4px;
+        right: 4px;
+        display: flex;
+        gap: 4px;
+        opacity: 0;
+        transition: opacity 0.15s ease-in-out;
+        pointer-events: auto;
+    }
+    .selection-overlay:hover .review-controls,
+    .selection-overlay.selected .review-controls {
+        opacity: 1;
+    }
+    .review-controls button {
+        width: 28px;
+        height: 28px;
+        border-radius: 4px;
+        border: none;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+        transition: transform 0.1s ease;
+    }
+    .review-controls button:hover {
+        transform: scale(1.1);
+    }
+    .review-controls .approve-btn {
+        background: #10B981;
+        color: white;
+    }
+    .review-controls .reject-btn {
+        background: #EF4444;
+        color: white;
+    }
+    .review-controls .undo-btn {
+        background: #F59E0B;
+        color: white;
+    }
+    /* Selection index badge on PDF overlay - notched corner style */
+    .selection-index {
+        position: absolute;
+        top: -2px;
+        left: -2px;
+        width: 22px;
+        height: 22px;
+        border-radius: 0 0 8px 0;  /* Only bottom-right corner rounded */
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 11px;
+        font-weight: 600;
+        color: white;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+    }
+    .selection-overlay.pending .selection-index {
+        background: #F59E0B;
+    }
+    .selection-overlay.approved .selection-index {
+        background: #10B981;
+    }
+    .selection-overlay.rejected .selection-index {
+        background: #EF4444;
+    }
+    .selection-overlay.failed .selection-index {
+        background: #DC2626;
+    }
+    /* Highlighted state for hover correlation - use distinct blue color */
+    .selection-overlay.highlighted,
+    .selection-overlay.pending.highlighted,
+    .selection-overlay.approved.highlighted,
+    .selection-overlay.rejected.highlighted,
+    .selection-overlay.failed.highlighted {
+        border-width: 3px;
+        border-color: #3B82F6 !important;
+        background: rgba(59, 130, 246, 0.15) !important;
+        box-shadow: 0 0 16px rgba(59, 130, 246, 0.6);
+        z-index: 10;
+    }
+    .selection-overlay.highlighted .selection-index,
+    .selection-overlay.pending.highlighted .selection-index,
+    .selection-overlay.approved.highlighted .selection-index {
+        background: #3B82F6 !important;
+    }
+    /* List item highlight - use distinct blue color */
+    .selection-list-item.highlighted {
+        background-color: #DBEAFE !important;
+        border-color: #3B82F6 !important;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div id="book-viewer-root" x-data="bookViewer" class="book-viewer-main">
+    <!-- Header -->
+    <div class="mb-4">
+        <div class="flex items-center space-x-2 text-sm text-gray-500 mb-2">
+            <a href="{% url 'reports_list' %}" class="hover:text-gray-700">Reports</a>
+            <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                <path fill-rule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clip-rule="evenodd"/>
+            </svg>
+            <span class="text-gray-900">{{ report.name }}</span>
+        </div>
+        <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <h1 class="text-2xl font-bold text-gray-900">Book Viewer</h1>
+            <a href="{% url 'report_detail' report.id %}" class="inline-flex items-center px-3 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">
+                <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path>
+                </svg>
+                Back to Report
+            </a>
+        </div>
+    </div>
+
+    <!-- Toolbar -->
+    <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-3 mb-4">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+            <!-- Mode Toggle -->
+            <div class="flex items-center space-x-2">
+                <span class="text-sm font-medium text-gray-700">Mode:</span>
+                <div class="inline-flex rounded-md shadow-sm">
+                    <button
+                        @click="mode = 'view'"
+                        :class="mode === 'view' ? 'bg-primary text-white' : 'bg-white text-gray-700 hover:bg-gray-50'"
+                        class="px-3 py-1.5 text-sm font-medium border border-gray-300 rounded-l-md focus:outline-none focus:ring-2 focus:ring-primary"
+                    >
+                        View
+                    </button>
+                    <button
+                        @click="mode = 'select'"
+                        :class="mode === 'select' ? 'bg-primary text-white' : 'bg-white text-gray-700 hover:bg-gray-50'"
+                        class="px-3 py-1.5 text-sm font-medium border border-gray-300 border-l-0 rounded-r-md focus:outline-none focus:ring-2 focus:ring-primary"
+                    >
+                        Select Tables
+                    </button>
+                </div>
+            </div>
+
+            <!-- Zoom Controls -->
+            <div class="flex items-center space-x-2">
+                <span class="text-sm font-medium text-gray-700">Zoom:</span>
+                <button
+                    @click="zoomOut()"
+                    :disabled="zoom <= 50"
+                    class="p-1.5 rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 12H4"></path>
+                    </svg>
+                </button>
+                <span class="text-sm font-medium text-gray-900 w-12 text-center" x-text="zoom + '%'"></span>
+                <button
+                    @click="zoomIn()"
+                    :disabled="zoom >= 200"
+                    class="p-1.5 rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
+                    </svg>
+                </button>
+            </div>
+
+            <!-- Navigation -->
+            <div class="flex items-center space-x-2">
+                <button
+                    @click="prevSpread()"
+                    :disabled="currentSpread <= 0"
+                    class="inline-flex items-center px-3 py-1.5 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                    <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path>
+                    </svg>
+                    Previous
+                </button>
+                <span class="text-sm text-gray-600" x-text="getSpreadLabel()"></span>
+                <button
+                    @click="nextSpread()"
+                    :disabled="!hasNextSpread()"
+                    class="inline-flex items-center px-3 py-1.5 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                    Next
+                    <svg class="w-4 h-4 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+                    </svg>
+                </button>
+            </div>
+
+            <!-- Page Input -->
+            <div class="flex items-center space-x-2">
+                <span class="text-sm text-gray-700">Go to:</span>
+                <input
+                    type="number"
+                    x-model="gotoPageInput"
+                    @keydown="handlePageInputKeydown($event)"
+                    @blur="goToPageFromInput()"
+                    min="1"
+                    :max="totalPages"
+                    class="w-16 px-2 py-1.5 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary focus:border-primary"
+                />
+                <span class="text-sm text-gray-500">of <span x-text="totalPages"></span></span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Loading Spinner -->
+    <div x-show="loading" class="flex items-center justify-center py-20">
+        <div class="text-center">
+            <svg class="animate-spin h-12 w-12 text-primary mx-auto mb-4" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+            <p class="text-gray-600">Loading PDF...</p>
+        </div>
+    </div>
+
+    <!-- Error Message -->
+    <div x-show="error" x-cloak class="rounded-md bg-red-50 p-4 mb-4">
+        <div class="flex">
+            <div class="flex-shrink-0">
+                <svg class="h-5 w-5 text-red-400" viewBox="0 0 20 20" fill="currentColor">
+                    <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd" />
+                </svg>
+            </div>
+            <div class="ml-3">
+                <h3 class="text-sm font-medium text-red-800">Failed to load PDF</h3>
+                <p class="mt-1 text-sm text-red-700" x-text="error"></p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Render Error -->
+    <div x-show="renderError" x-cloak class="rounded-md bg-yellow-50 p-4 mb-4">
+        <div class="flex">
+            <div class="flex-shrink-0">
+                <svg class="h-5 w-5 text-yellow-400" viewBox="0 0 20 20" fill="currentColor">
+                    <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd" />
+                </svg>
+            </div>
+            <div class="ml-3">
+                <h3 class="text-sm font-medium text-yellow-800">Page render error</h3>
+                <p class="mt-1 text-sm text-yellow-700" x-text="renderError"></p>
+                <button @click="renderSpread()" class="mt-2 text-sm font-medium text-yellow-800 hover:text-yellow-900 underline">
+                    Retry
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Book Spread -->
+    <div x-show="!loading && !error" x-cloak class="bg-gray-200 rounded-lg p-4 mb-4 relative">
+        <!-- Page Rendering Indicator -->
+        <div x-show="renderingPages" class="absolute inset-0 bg-gray-200 bg-opacity-75 flex items-center justify-center z-10 rounded-lg">
+            <div class="flex items-center space-x-2 text-gray-600">
+                <svg class="animate-spin h-5 w-5" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                <span class="text-sm">Rendering pages...</span>
+            </div>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4" :style="{ transform: 'scale(' + (zoom / 100) + ')', transformOrigin: 'top center' }">
+            <!-- Left Page -->
+            <div class="flex flex-col items-center">
+                <div
+                    id="left-page-container"
+                    class="page-container w-full rounded-lg overflow-hidden"
+                    :class="{ 'cursor-crosshair': mode === 'select' }"
+                    @mousedown="mode === 'select' && startSelection($event, 'left')"
+                    @mousemove="mode === 'select' && updateSelection($event)"
+                    @mouseup="mode === 'select' && endSelection($event)"
+                >
+                    <canvas id="left-page-canvas"></canvas>
+                    <template x-for="(sel, idx) in getSelectionsForPage(leftPageNum)" :key="sel.id">
+                        <div
+                            class="selection-overlay"
+                            :class="[sel.status, { 'highlighted': hoveredSelectionId === sel.id }]"
+                            :style="getSelectionStyle(sel, 'left')"
+                            @mouseenter="setHoveredSelection(sel.id)"
+                            @mouseleave="setHoveredSelection(null)"
+                        >
+                            <!-- Index badge -->
+                            <div class="selection-index" :style="hoveredSelectionId === sel.id ? 'background: #3B82F6' : ''">
+                                <span x-text="selections.indexOf(sel) + 1"></span>
+                            </div>
+                            <!-- Review controls for YOLO pending boxes -->
+                            <div x-show="isYoloPending(sel)" class="review-controls">
+                                <button
+                                    class="approve-btn"
+                                    @click.stop="approveSelection(sel.id)"
+                                    title="Approve detection"
+                                >
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                                    </svg>
+                                </button>
+                                <button
+                                    class="reject-btn"
+                                    @click.stop="rejectSelection(sel.id)"
+                                    title="Reject detection"
+                                >
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                                    </svg>
+                                </button>
+                            </div>
+                            <!-- Undo control for approved/rejected boxes -->
+                            <div x-show="sel.status === 'approved' || sel.status === 'rejected'" class="review-controls">
+                                <button
+                                    class="undo-btn"
+                                    @click.stop="resetSelection(sel.id)"
+                                    title="Undo - return to pending"
+                                >
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h10a5 5 0 015 5v2M3 10l4-4M3 10l4 4"></path>
+                                    </svg>
+                                </button>
+                            </div>
+                        </div>
+                    </template>
+                    <!-- Drawing preview -->
+                    <div
+                        x-show="isDrawing && drawingPage === 'left'"
+                        class="selection-overlay preview"
+                        :style="getDrawingPreviewStyle('left')"
+                    ></div>
+                </div>
+                <p class="mt-2 text-sm text-gray-600" x-show="leftPageNum > 0">
+                    Page <span x-text="leftPageNum"></span>
+                </p>
+            </div>
+
+            <!-- Right Page -->
+            <div class="flex flex-col items-center">
+                <div
+                    id="right-page-container"
+                    class="page-container w-full rounded-lg overflow-hidden"
+                    :class="{ 'cursor-crosshair': mode === 'select' }"
+                    @mousedown="mode === 'select' && startSelection($event, 'right')"
+                    @mousemove="mode === 'select' && updateSelection($event)"
+                    @mouseup="mode === 'select' && endSelection($event)"
+                >
+                    <canvas id="right-page-canvas"></canvas>
+                    <template x-for="(sel, idx) in getSelectionsForPage(rightPageNum)" :key="sel.id">
+                        <div
+                            class="selection-overlay"
+                            :class="[sel.status, { 'highlighted': hoveredSelectionId === sel.id }]"
+                            :style="getSelectionStyle(sel, 'right')"
+                            @mouseenter="setHoveredSelection(sel.id)"
+                            @mouseleave="setHoveredSelection(null)"
+                        >
+                            <!-- Index badge -->
+                            <div class="selection-index" :style="hoveredSelectionId === sel.id ? 'background: #3B82F6' : ''">
+                                <span x-text="selections.indexOf(sel) + 1"></span>
+                            </div>
+                            <!-- Review controls for YOLO pending boxes -->
+                            <div x-show="isYoloPending(sel)" class="review-controls">
+                                <button
+                                    class="approve-btn"
+                                    @click.stop="approveSelection(sel.id)"
+                                    title="Approve detection"
+                                >
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                                    </svg>
+                                </button>
+                                <button
+                                    class="reject-btn"
+                                    @click.stop="rejectSelection(sel.id)"
+                                    title="Reject detection"
+                                >
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                                    </svg>
+                                </button>
+                            </div>
+                            <!-- Undo control for approved/rejected boxes -->
+                            <div x-show="sel.status === 'approved' || sel.status === 'rejected'" class="review-controls">
+                                <button
+                                    class="undo-btn"
+                                    @click.stop="resetSelection(sel.id)"
+                                    title="Undo - return to pending"
+                                >
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h10a5 5 0 015 5v2M3 10l4-4M3 10l4 4"></path>
+                                    </svg>
+                                </button>
+                            </div>
+                        </div>
+                    </template>
+                    <!-- Drawing preview -->
+                    <div
+                        x-show="isDrawing && drawingPage === 'right'"
+                        class="selection-overlay preview"
+                        :style="getDrawingPreviewStyle('right')"
+                    ></div>
+                </div>
+                <p class="mt-2 text-sm text-gray-600" x-show="rightPageNum > 0 && rightPageNum <= totalPages">
+                    Page <span x-text="rightPageNum"></span>
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Extraction Overlay -->
+    <div x-show="extracting" x-cloak class="fixed inset-0 bg-gray-900 bg-opacity-50 flex items-center justify-center z-50">
+        <div class="bg-white rounded-lg shadow-xl p-6 max-w-md w-full mx-4">
+            <div class="text-center">
+                <svg class="animate-spin h-12 w-12 text-primary mx-auto mb-4" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                <h3 class="text-lg font-medium text-gray-900 mb-2">Extracting Tables</h3>
+                <p class="text-sm text-gray-600 mb-4" x-text="extractProgress?.message || 'Processing...'"></p>
+                <div class="w-full bg-gray-200 rounded-full h-2">
+                    <div
+                        class="bg-primary h-2 rounded-full transition-all duration-300"
+                        :style="{ width: extractProgress?.total > 0 ? (extractProgress.current / extractProgress.total * 100) + '%' : '10%' }"
+                    ></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Extraction Error Modal -->
+    <div x-show="extractError" x-cloak class="fixed inset-0 bg-gray-900 bg-opacity-50 flex items-center justify-center z-50">
+        <div class="bg-white rounded-lg shadow-xl p-6 max-w-md w-full mx-4">
+            <div class="flex items-start space-x-4">
+                <div class="flex-shrink-0">
+                    <svg class="h-6 w-6 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                    </svg>
+                </div>
+                <div class="flex-1">
+                    <h3 class="text-lg font-medium text-gray-900 mb-2">Extraction Failed</h3>
+                    <p class="text-sm text-gray-600 mb-4" x-text="extractError"></p>
+                    <div class="flex space-x-3">
+                        <button
+                            @click="retryExtraction()"
+                            class="px-4 py-2 bg-primary text-white text-sm font-medium rounded-md hover:bg-primary-dark focus:outline-none focus:ring-2 focus:ring-primary"
+                        >
+                            Retry
+                        </button>
+                        <button
+                            @click="closeExtractionError()"
+                            class="px-4 py-2 bg-white border border-gray-300 text-gray-700 text-sm font-medium rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-300"
+                        >
+                            Close
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Partial Success Modal -->
+    <div x-show="partialSuccess" x-cloak class="fixed inset-0 bg-gray-900 bg-opacity-50 flex items-center justify-center z-50">
+        <div class="bg-white rounded-lg shadow-xl p-6 max-w-md w-full mx-4">
+            <div class="flex items-start space-x-4">
+                <div class="flex-shrink-0">
+                    <svg class="h-6 w-6 text-yellow-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                    </svg>
+                </div>
+                <div class="flex-1">
+                    <h3 class="text-lg font-medium text-gray-900 mb-2">Extraction Partially Complete</h3>
+                    <p class="text-sm text-gray-600 mb-2">
+                        Extracted <span class="font-medium" x-text="partialSuccess?.tablesExtracted || 0"></span> table(s) successfully.
+                    </p>
+                    <p class="text-sm text-gray-600 mb-4">
+                        Failed to extract from page(s): <span class="font-medium text-red-600" x-text="partialSuccess?.failedPages?.join(', ') || ''"></span>
+                    </p>
+                    <p class="text-xs text-gray-500 mb-4">
+                        Failed selections have been marked. You can try adjusting them and extracting again.
+                    </p>
+                    <div class="flex space-x-3">
+                        <button
+                            @click="dismissPartialSuccess()"
+                            class="px-4 py-2 bg-primary text-white text-sm font-medium rounded-md hover:bg-primary-dark focus:outline-none focus:ring-2 focus:ring-primary"
+                        >
+                            View Results
+                        </button>
+                        <button
+                            @click="partialSuccess = null; loadSelections()"
+                            class="px-4 py-2 bg-white border border-gray-300 text-gray-700 text-sm font-medium rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-300"
+                        >
+                            Stay & Review
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Selection Panel -->
+    <div x-show="!loading && !error" x-cloak class="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+        <div class="flex items-center justify-between mb-3">
+            <h3 class="text-lg font-medium text-gray-900">
+                Table Selections
+                <span class="ml-2 px-2 py-0.5 text-sm font-medium rounded-full bg-gray-100 text-gray-700" x-text="selections.length"></span>
+            </h3>
+            <div class="flex items-center space-x-4" x-show="selections.length > 0">
+                <span class="text-sm text-gray-500">
+                    <span x-text="getApprovedCount()"></span> approved
+                </span>
+                <button
+                    @click="startExtraction()"
+                    :disabled="getApprovedCount() === 0"
+                    class="inline-flex items-center px-4 py-2 bg-green-600 text-white text-sm font-medium rounded-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                    <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
+                    </svg>
+                    Extract Selected Tables (<span x-text="getApprovedCount()"></span>)
+                </button>
+            </div>
+        </div>
+
+        <div x-show="selections.length === 0" class="text-center py-6 text-gray-500">
+            <svg class="mx-auto h-10 w-10 text-gray-400 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"></path>
+            </svg>
+            <p x-text="getEmptyStateMessage()"></p>
+            <p class="text-sm mt-1" x-text="getEmptyStateHint()"></p>
+        </div>
+
+        <div x-show="selections.length > 0" class="space-y-2 max-h-48 overflow-y-scroll pr-2">
+            <template x-for="(sel, idx) in selections" :key="sel.id">
+                <div
+                    class="selection-list-item flex items-center justify-between p-2 rounded-md bg-gray-50 hover:bg-gray-100 cursor-pointer border border-transparent"
+                    :class="{ 'highlighted': hoveredSelectionId === sel.id, 'approved': sel.status === 'approved' }"
+                    @mouseenter="setHoveredSelection(sel.id)"
+                    @mouseleave="setHoveredSelection(null)"
+                    @click="selectTable(sel)"
+                >
+                    <div class="flex items-center space-x-3">
+                        <span
+                            class="w-3 h-3 rounded-full flex-shrink-0"
+                            :class="{
+                                'bg-yellow-400': sel.status === 'pending',
+                                'bg-green-400': sel.status === 'approved',
+                                'bg-red-400': sel.status === 'rejected',
+                                'bg-red-600': sel.status === 'failed'
+                            }"
+                        ></span>
+                        <span class="text-sm text-gray-700" x-text="getSelectionLabel(sel, idx)"></span>
+                        <!-- Source icon: robot for auto, pencil for manual -->
+                        <span
+                            class="text-gray-400"
+                            :title="sel.source === 'yolo' ? 'Auto-detected' : 'Manually drawn'"
+                        >
+                            <!-- Robot icon for YOLO -->
+                            <svg x-show="sel.source === 'yolo'" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"></path>
+                            </svg>
+                            <!-- Pencil icon for manual -->
+                            <svg x-show="sel.source === 'manual'" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"></path>
+                            </svg>
+                        </span>
+                    </div>
+                    <div class="flex items-center space-x-1">
+                        <!-- Approve/reject buttons for YOLO pending -->
+                        <template x-if="isYoloPending(sel)">
+                            <button
+                                @click="approveSelection(sel.id)"
+                                class="p-1 text-green-500 hover:text-green-700"
+                                title="Approve detection"
+                            >
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                                </svg>
+                            </button>
+                        </template>
+                        <template x-if="isYoloPending(sel)">
+                            <button
+                                @click="rejectSelection(sel.id)"
+                                class="p-1 text-red-400 hover:text-red-600"
+                                title="Reject detection"
+                            >
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                                </svg>
+                            </button>
+                        </template>
+                        <!-- Undo button for approved/rejected selections -->
+                        <template x-if="sel.status === 'approved' || sel.status === 'rejected'">
+                            <button
+                                @click="resetSelection(sel.id)"
+                                class="p-1 text-yellow-500 hover:text-yellow-600"
+                                title="Undo - return to pending"
+                            >
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h10a5 5 0 015 5v2M3 10l4-4M3 10l4 4"></path>
+                                </svg>
+                            </button>
+                        </template>
+                        <button
+                            @click="goToPage(sel.page_num)"
+                            class="p-1 text-gray-400 hover:text-gray-600"
+                            title="Go to page"
+                        >
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path>
+                            </svg>
+                        </button>
+                        <button
+                            @click="deleteSelection(sel.id)"
+                            class="p-1 text-gray-400 hover:text-red-600"
+                            title="Delete selection"
+                        >
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+            </template>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+{% load static %}
+<script type="module">
+    console.log('[BookViewer] Module script starting...');
+
+    try {
+        // Import the book-viewer module
+        const { createBookViewer } = await import('{% static "js/book-viewer.js" %}');
+        console.log('[BookViewer] Module imported successfully');
+
+        const pdfUrl = '{{ report.document.url }}';
+        const fullPdfUrl = pdfUrl.startsWith('/') ? window.location.origin + pdfUrl : pdfUrl;
+        console.log('[BookViewer] PDF URL:', fullPdfUrl);
+
+        // Get the Alpine data that was initialized by the stub
+        const viewerEl = document.getElementById('book-viewer-root');
+        const alpineData = Alpine.$data(viewerEl);
+        console.log('[BookViewer] Got Alpine data:', !!alpineData);
+
+        if (alpineData) {
+            // Create the real component (with methods)
+            const realComponent = createBookViewer({
+                reportId: {{ report.id }},
+                pdfUrl: fullPdfUrl,
+                extractionMode: '{{ report.extraction_mode }}'
+            });
+
+            // Copy all methods and config from real component to Alpine data
+            for (const [key, value] of Object.entries(realComponent)) {
+                if (typeof value === 'function') {
+                    alpineData[key] = value.bind(alpineData);
+                } else if (key !== 'loading') {
+                    // Don't overwrite reactive properties that Alpine is already tracking
+                    alpineData[key] = value;
+                }
+            }
+            console.log('[BookViewer] Methods copied to Alpine data');
+
+            // Now call init
+            console.log('[BookViewer] Calling init()...');
+            await alpineData.init();
+            console.log('[BookViewer] Init complete');
+        }
+    } catch (err) {
+        console.error('[BookViewer] Failed to load:', err);
+        const loader = document.querySelector('#book-viewer-root .text-center');
+        if (loader) {
+            loader.textContent = '';
+
+            const errorIcon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+            errorIcon.setAttribute('class', 'h-12 w-12 text-red-500 mx-auto mb-4');
+            errorIcon.setAttribute('fill', 'none');
+            errorIcon.setAttribute('viewBox', '0 0 24 24');
+            errorIcon.setAttribute('stroke', 'currentColor');
+            const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+            path.setAttribute('stroke-linecap', 'round');
+            path.setAttribute('stroke-linejoin', 'round');
+            path.setAttribute('stroke-width', '2');
+            path.setAttribute('d', 'M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z');
+            errorIcon.appendChild(path);
+
+            const errorTitle = document.createElement('p');
+            errorTitle.className = 'text-red-600 font-medium';
+            errorTitle.textContent = 'Failed to load PDF viewer';
+
+            const errorMsg = document.createElement('p');
+            errorMsg.className = 'text-gray-500 text-sm mt-1';
+            errorMsg.textContent = err.message;
+
+            const retryBtn = document.createElement('button');
+            retryBtn.className = 'mt-4 px-4 py-2 bg-primary text-white rounded-md hover:bg-blue-600';
+            retryBtn.textContent = 'Retry';
+            retryBtn.onclick = () => location.reload();
+
+            loader.appendChild(errorIcon);
+            loader.appendChild(errorTitle);
+            loader.appendChild(errorMsg);
+            loader.appendChild(retryBtn);
+        }
+    }
+</script>
+{% endblock %}

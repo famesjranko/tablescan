@@ -1,0 +1,293 @@
+# Ralph Progress Log - book-viewer-prd
+Task File: /home/andy/automated-PDF-tabulated-data-extractor-api/docs/book-viewer-prd.json
+Started: Wed Mar 11 08:12:09 PM AEDT 2026
+
+## Codebase Patterns
+- Django 3.2 with DRF
+- Extraction pipeline in api/scripts/
+- Models in api/models.py (Report, Extracted)
+- Async via Celery (api/tasks.py)
+- Current extraction: YOLO -> Camelot
+
+---
+
+## BV-001: Add TableSelection model [COMPLETE]
+- Added TableSelection model to api/models.py
+- Fields: report (FK), page_num, x1/y1/x2/y2 (floats), confidence (nullable), source, status, created_at
+- Source choices: yolo, manual
+- Status choices: pending, approved, rejected, failed
+- Migration 0006_add_tableselection_model.py created and applied
+- Existing data verified intact (4 reports, 2 extracted records)
+- Commit: 981595d
+
+## BV-002: Add extraction_mode and extraction_status to Report model [COMPLETE]
+- Added extraction_mode field: choices (auto, manual, review), default='auto'
+- Added extraction_status field: choices (uploaded, detecting, pending_review, extracting, completed, failed), default='uploaded'
+- Migration 0007_add_extraction_mode_and_status.py created and applied
+- Existing reports migrated to extraction_mode='auto', extraction_status='completed'
+- Verified: 4 existing reports correctly updated
+- Commit: 88dddab
+
+## BV-003: Create TableSelectionSerializer [COMPLETE]
+- Added TableSelectionSerializer in api/serializers.py
+- Fields: id, report, page_num, x1, y1, x2, y2, confidence, source, status, created_at
+- report and created_at fields are read-only
+- Validates all coordinates are non-negative floats
+- Validates x1 < x2 and y1 < y2 (proper box orientation)
+- Validates page_num within report's total_pages (when report in context)
+- source defaults to 'manual' if not provided
+- status defaults to 'approved' for manual, 'pending' for yolo source
+- Tested: validation logic works correctly
+- Commit: 74779d1
+
+## BV-004: Add PDF metadata API endpoint [COMPLETE]
+- Added @action(detail=True) metadata endpoint to ReportViewSet
+- Endpoint: GET /api/reports/{id}/metadata/
+- Returns: {total_pages, pages: [{page_num, width, height, rotation}, ...]}
+- Uses PyMuPDF (fitz) to read page dimensions and rotation
+- Handles rotated pages correctly (swaps width/height for 90/270 rotation)
+- Protected by existing IsReportOwner permission (only report owner can access)
+- Returns 404 for invalid report ID (via get_object())
+- Added import for fitz and @action decorator
+- Verified: Django check passes, endpoint correctly registered
+
+## BV-005: Add TableSelection CRUD API endpoints [COMPLETE]
+- Added TableSelectionViewSet to api/views.py
+- Endpoints:
+  - GET /api/reports/{id}/selections/ - list selections for report
+  - GET ?page_num= - filter by page number
+  - GET ?status= - filter by status (comma-separated, e.g., ?status=pending,approved)
+  - POST /api/reports/{id}/selections/ - create selection (sets report from URL)
+  - PATCH /api/reports/{id}/selections/{sel_id}/ - update status field only
+  - DELETE /api/reports/{id}/selections/{sel_id}/ - remove selection
+- All endpoints require authentication
+- Report ownership enforced (returns 404 if not owned)
+- Selection must belong to report (returns 404 if not)
+- PATCH validates status value against STATUS_CHOICES
+- PATCH rejects attempts to modify non-status fields with 400
+- Added nested URL patterns in api/urls.py
+- Tested: All CRUD operations verified working
+- Commit: 76429b8
+
+## BV-006: Create standalone YOLO detection function [COMPLETE]
+- Added detect_table_regions(file_path, page_number) to api/scripts/YOLOV3/predict_table.py
+- Returns list of dicts: [{x1, y1, x2, y2, confidence}, ...]
+- Coordinates in PDF space (bottom-left origin) using bboxes_pdf() Y-flip
+- Reuses existing YOLO inference: detectTable, outpout_yolo, bboxes_pdf, norm_bbox
+- Does NOT call Camelot or save to database
+- Cleans up temporary image files (Path.unlink)
+- Added unit tests in api/tests/test_predict_table.py
+- Tests skip gracefully when poppler not installed
+- Commit: c86e94e
+
+## BV-007: Add detect-for-review Celery task [COMPLETE]
+- Added detect_tables_for_review(report_id) Celery task to api/tasks.py
+- Updates Report.extraction_status to 'detecting' at start
+- Iterates through report page range (start_page to end_page)
+- Calls detect_table_regions() for each page
+- Saves each detected region as TableSelection(source='yolo', status='pending')
+- Updates Report.extraction_status to 'pending_review' on success
+- Updates Report.extraction_status to 'failed' on error
+- Returns {status, report_id, selections_count, redirect_url} for frontend
+- Uses existing TaskStatusView pattern at /task-status/<task_id>/
+- Progress updates via self.update_state() for SSE streaming
+- Handles page-level errors gracefully (continues with other pages)
+- Commit: 01fae46
+
+## BV-008: Add extract-from-selections Celery task and endpoint [COMPLETE]
+- Added extract_from_selections(report_id) Celery task to api/tasks.py
+- Gets TableSelection records with status='approved' (YOLO-approved + manual)
+- Groups selections by page_num
+- Builds table_areas as [(x1, y1, x2, y2), ...] for each page (PDF space coordinates)
+- Calls MultiExtractor.extract_best(pdf_path, page_num, table_areas=[...])
+- Saves results using save_extraction_results() to Extracted model
+- Creates csv, json, xlsx output files
+- Updates Report.extraction_status: 'extracting' -> 'completed'
+- Added POST /api/reports/{id}/extract-selections/ endpoint
+- Endpoint triggers task and returns {task_id, status, approved_selections}
+- Returns 400 if no approved selections found
+- Uses existing TaskStatusView at /task-status/<task_id>/ for polling
+
+## BV-009: Add book viewer Django view and URL [COMPLETE]
+- Added BookViewerView class to api/views.py
+- Uses LoginRequiredMixin and View (standard Django CBV pattern)
+- URL pattern: /reports/<int:pk>/viewer/ maps to BookViewerView
+- Verifies report ownership: returns 403 if report.owner != request.user
+- Returns 404 for invalid report ID via get_object_or_404()
+- Passes report object to template context ('reports/book_viewer.html')
+- CSRF token automatically available in Django templates
+- Commit: 8361f48
+
+## BV-010: Create book viewer template [COMPLETE]
+- Created templates/reports/book_viewer.html extending base.html
+- PDF.js 4.4.168 via CDN (ES module import with worker)
+- Two-page spread layout with left-page-container and right-page-container
+- Navigation controls: prevSpread/nextSpread with disabled states
+- Mode toggle: View and Select Tables modes
+- Zoom controls: +/- buttons with 25% increments (50%-200% range)
+- Page numbers displayed below each page canvas
+- Selection panel: shows all selections with count, status indicators
+- Loading spinner with "Loading PDF..." message
+- Error message section with red styling for load failures
+- CSRF token in meta tag: <meta name="csrf-token" content="{{ csrf_token }}">
+- Alpine.js state management for reactive updates
+- Selection drawing with mouse events in Select Tables mode
+- API integration: loads/creates/deletes selections via fetch()
+- Commit: b475aee
+
+## BV-011: Create book viewer Alpine.js component [COMPLETE]
+- Created static/js/book-viewer.js with createBookViewer() function
+- PDF.js 4.x ES module import pattern
+- Renders two pages side-by-side with currentSpread state
+- Handles single-page PDFs and odd page counts (clears right canvas)
+- Prev/next navigation updates spread and re-renders
+- Added page number input field with validation (1 to totalPages)
+- Stores PDF dimensions in canvas.dataset (pdfWidth, pdfHeight, pageNum, scale)
+- Zoom controls scale viewport (50%-200% / 0.5x-2.0x range)
+- Loading state indicator during page render (renderingPages)
+- Render errors displayed with retry option (renderError)
+- Updated template to import external JS file
+- Commit: c91fbce
+
+## BV-012: Create bounding box manager component [COMPLETE]
+- Created static/js/bbox-manager.js with BoundingBoxManager class
+- Overlay canvas positioned absolutely on top of each PDF page canvas
+- Loads existing selections from API on page render (loadSelections method)
+- Color-codes boxes: orange (#F59E0B) for YOLO pending, green (#10B981) for approved, blue (#3B82F6) for manual
+- Mouse events for drawing new boxes (mousedown, mousemove, mouseup)
+- Ignores boxes smaller than 20x20 canvas pixels (accidental clicks filter)
+- Click existing box to select it (highlight with dashed border + show controls)
+- Coordinate conversion: canvasToPdf() and pdfToCanvas() functions
+- canvasToPdf() applies Y-axis flip: pdf_y = page_height - canvas_y (PDF uses bottom-left origin)
+- pdfToCanvas() applies inverse Y-axis flip: canvas_y = page_height - pdf_y
+- After drawing, shows confirm/cancel buttons before saving to API
+- Pressing Escape or clicking cancel removes the pending box without API call
+- Saves new selections to API on confirm with CSRF token from meta tag
+- Shows error toast if API save fails with retry option
+- Additional methods: updateStatus(), deleteSelection(), selectBox(), clearSelection()
+- Proper cleanup via destroy() method
+- Commit: c2dc93a
+
+## BV-013: Add review controls for YOLO detections [COMPLETE]
+- Added approve/reject icons on YOLO pending boxes (appear on hover)
+- Icons positioned at top-right of selection overlay with opacity transition
+- Added approve/reject buttons in selection panel list for YOLO pending items
+- Added updateSelectionStatus(selId, status) method with PATCH API call
+- CSRF token included via X-CSRFToken header
+- Box color updates immediately on status change (Alpine.js reactive)
+- Rejected boxes styled with opacity: 0.4 and red border
+- Error toast with dismiss button and auto-dismiss after 5 seconds
+- Uses safe DOM methods (no innerHTML with untrusted content)
+- Commit: 192f64a
+
+## BV-014: Add extract button and extraction flow to viewer [COMPLETE]
+- Added extraction state variables (extracting, extractProgress, extractError, extractTaskId) to Alpine component
+- Added "Extract Selected Tables (N)" button in selection panel header
+- Button shows count of approved selections and is disabled when count is 0
+- startExtraction() triggers POST to /api/reports/{id}/extract-selections/
+- pollTaskStatus() polls /task-status/{taskId}/ every 1s (max 5 minutes)
+- Extraction overlay with spinner and progress bar during processing
+- Progress bar updates based on task progress state from Celery
+- Error modal with retry and close buttons on failure
+- Redirects to /reports/{id}/ on successful extraction completion
+- Commit: 534c682
+
+## BV-015: Add extraction mode selector to upload page [COMPLETE]
+- Added radio button group to upload.html with three extraction modes
+- Automatic (default): AI detects and extracts tables, results appear immediately
+- Auto + Review: AI detects tables, user approves/adjusts in viewer before extraction
+- Manual Selection: User draws table regions in viewer, best for complex layouts
+- Each option has descriptive text explaining the workflow
+- extraction_mode sent in form submission and saved to Report model
+- UploadAsyncView handles different modes:
+  - auto: uses existing extract_tables_task, redirects to results
+  - review: triggers detect_tables_for_review task, polls status, redirects to viewer when complete
+  - manual: sets extraction_status='pending_review', redirects immediately to viewer
+- Progress indicator shows appropriate status message ("Detecting tables..." for review mode)
+- Commit: 6d7904f
+
+## BV-016: Add Open Viewer link to report detail page [COMPLETE]
+- Added "Open Book Viewer" button to reports/detail.html action buttons group
+- Styled with bg-primary (blue) matching other primary action buttons
+- Uses book icon SVG for visual consistency
+- Links to {% url 'book_viewer' report.id %}
+- Visible for all reports regardless of extraction_mode
+- Positioned between "Original PDF" and "Download All CSV" buttons
+- Commit: 25411bd
+
+## BV-017: End-to-end test: Manual selection flow [COMPLETE]
+- Created api/tests/test_phase5_e2e.py with 36 comprehensive tests
+- Tests cover the complete manual selection workflow:
+  - Code structure verification (views, tasks, models)
+  - API endpoint tests for selections CRUD
+  - Serializer default behavior (source='manual', status='approved')
+  - Integration tests with Django test client
+  - Coordinate transformation tests (canvasToPdf, pdfToCanvas)
+  - Book viewer template verification
+- Verified acceptance criteria:
+  - Upload with extraction_mode='manual' sets extraction_status='pending_review'
+  - Manual mode creates no YOLO boxes (blank overlay)
+  - Manual selections default to source='manual', status='approved'
+  - extract_from_selections filters only approved selections
+  - MultiExtractor accepts table_areas parameter
+- All 36 tests pass
+- Commit: 08a710c
+
+## BV-018: End-to-end test: Auto + Review flow [COMPLETE]
+- Extended api/tests/test_phase5_e2e.py with 31 additional tests (67 total)
+- Tests cover the complete Auto + Review workflow:
+  - Code structure: detect_tables_for_review task, review mode handling
+  - Status transitions: 'detecting' -> 'pending_review'
+  - YOLO detection creates selections with source='yolo', status='pending'
+  - Approve/reject API (PATCH) updates status correctly
+  - Manual selections added during review with source='manual', status='approved'
+  - Extraction filters by status='approved' (includes YOLO approved + manual)
+  - Rejected/pending boxes NOT included in extraction
+- Fixed serializer bug: PATCH was overwriting source='yolo' with 'manual'
+  - Changed validate() to only set defaults on create (self.instance is None)
+- Verified acceptance criteria:
+  - Auto + Review mode uses extraction_mode='review'
+  - YOLO detection task transitions: detecting -> pending_review
+  - Approved YOLO + manual boxes extracted together
+  - Rejected boxes excluded from extraction results
+- All 67 tests pass
+- Commit: 3242ae0
+
+## BV-019: End-to-end test: Edge cases [COMPLETE]
+- Extended api/tests/test_phase5_e2e.py with 42 additional tests (109 total)
+- Tests verify handling of edge cases and error conditions:
+  - Single-page PDF: clearCanvas for right page, label hidden, spread label correct
+  - Large PDF (25 pages): Lazy rendering of visible spread only, no browser freeze
+  - Invalid PDF: Error state set, error message displayed, retry button available
+  - Network error during save: Retry button shown, dismiss clears state
+  - Extraction error: Modal with retry/close buttons, retryExtraction method
+  - Zoom: CSS transform scaling, 50-200% range, positions preserved
+  - Unsaved changes: Pending box state tracked, Escape cancels, explicit confirm/cancel
+- Verified acceptance criteria:
+  - Single-page PDF displays correctly (no empty right page)
+  - Large PDF (20+ pages) loads without browser freeze (lazy rendering)
+  - Invalid PDF shows error message in viewer
+  - Network error during save shows retry option
+  - Unsaved changes: Not applicable - current UX requires explicit box confirmation
+  - Zooming preserves box positions correctly (CSS transform on container)
+- All 109 tests pass
+- Commit: f98132b
+
+## BV-020: Handle edge cases in detection and extraction [COMPLETE]
+- Zero YOLO detections in review mode shows: 'No tables detected. Draw selections manually or try a different PDF.'
+- Viewer opens normally with empty overlay when 0 detections (already worked)
+- Partial extraction success reports failed pages with list in modal
+- Failed selections marked with status='failed' in database
+- Network error during box save shows inline retry button (already implemented in BV-012)
+- Network error during extraction shows retry button (already implemented in BV-014)
+- All error messages sanitized to be user-friendly (no raw exception text)
+- Implementation details:
+  - Added extractionMode config to JS for context-aware empty messages
+  - Added getEmptyStateMessage() and getEmptyStateHint() methods
+  - Added failed_pages tracking in extract_from_selections task
+  - Added partial success modal with "View Results" and "Stay & Review" options
+  - Added CSS styling for failed selections (dashed red border, #DC2626)
+  - Sanitized task exceptions to show user-friendly messages
+- Extended tests with 23 new tests (132 total)
+- Commit: aef730a
+
