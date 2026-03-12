@@ -1,29 +1,43 @@
 # TableScan
 
-Automated PDF table extraction with a modern web interface. Upload PDFs, extract tables using AI-powered detection, and download results as CSV/JSON.
+Automated PDF table extraction with AI-powered detection. Upload PDFs, review detected tables, and export to CSV/JSON.
 
 ## Features
 
 - **AI Table Detection** - YOLOv3 locates tables in PDF documents
-- **Accurate Parsing** - Camelot extracts table data with high fidelity
-- **Book Viewer** - Interactive PDF viewer with page-by-page navigation
+- **Book Viewer** - Interactive PDF viewer with page navigation and zoom
+- **Review Workflow** - Approve/reject detections before extraction
 - **Manual Selection** - Draw table regions directly on the PDF
-- **Review Workflow** - Approve/reject AI detections before extraction
-- **Multiple Extraction Modes** - Auto, Auto+Review, or Manual
-- **Web Interface** - Clean, responsive UI built with htmx + Tailwind CSS
+- **Multiple Modes** - Auto, Auto+Review, or Manual extraction
 - **Async Processing** - Celery handles extraction in the background
-- **Multiple Exports** - Download as CSV, JSON, or ZIP archive
+- **Multiple Exports** - CSV, JSON, or ZIP archive
 
 ## Quick Start
 
 ```bash
-# Clone and start
-git clone https://github.com/your-repo/tablescan.git
-cd tablescan
-docker-compose up --build
+git clone https://github.com/famesjranko/automated-PDF-tabulated-data-extractor-api.git
+cd automated-PDF-tabulated-data-extractor-api
+
+# Start with Docker (recommended)
+make docker-build
+make docker-dev
 
 # Open http://localhost:8000
 ```
+
+## Development
+
+All development commands are available via `make help`:
+
+```bash
+make docker-dev      # Build and run with Docker
+make dev             # Run locally (Django + Redis + Celery)
+make test            # Run all tests
+make test-unit       # Run unit tests only (no services)
+make clean           # Stop services and clean temp files
+```
+
+Requires Docker, or Python 3.11+ with Redis and Poppler (`apt install poppler-utils`).
 
 ## Architecture
 
@@ -33,94 +47,51 @@ Browser ──► Django ──► Celery Worker
               │         [YOLOv3 Detection]
               │         [Camelot Parsing]
               │              │
-              └──── Redis ◄──┘
+         PostgreSQL    Redis (broker)
 ```
 
-**Stack**: Django 3.2 / htmx / Tailwind CSS / Celery / Redis / YOLOv3 / Camelot
+**Stack**: Django 4.2 / htmx / Tailwind CSS / Celery / Redis / PostgreSQL / YOLOv3 / Camelot
 
 ## Usage
 
 ### Extraction Modes
 
-1. **Auto** - Upload PDF, YOLO detects tables, extraction runs immediately
-2. **Auto + Review** - YOLO detects tables, you approve/reject before extraction
-3. **Manual** - Draw table regions yourself, full control over extraction
+| Mode | Description |
+|------|-------------|
+| **Auto** | YOLO detects tables, extraction runs immediately |
+| **Auto + Review** | YOLO detects tables, approve/reject before extraction |
+| **Manual** | Draw table regions yourself |
 
 ### Workflow
 
-1. **Upload** - Drag & drop or select a PDF, choose extraction mode
-2. **Review** (if Auto+Review or Manual) - Open Book Viewer, approve/reject detections or draw manual selections
-3. **Extract** - Run extraction on approved regions
-4. **Download** - Get individual tables (CSV/JSON) or everything as ZIP
+1. **Upload** - Select PDF and extraction mode
+2. **Review** - Open Book Viewer, approve/reject/draw selections
+3. **Extract** - Process approved regions
+4. **Download** - Get CSV/JSON or ZIP archive
 
-## API Endpoints
+## API
 
-### Reports
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/upload/` | POST | Upload PDF and trigger extraction |
-| `/api/reports/` | GET | List all reports |
-| `/api/reports/{id}/` | GET | Get report with extracted tables |
-| `/api/reports/{id}/` | DELETE | Delete a report |
-
-### Table Selections
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/reports/{id}/selections/` | GET | List table selections for a report |
-| `/api/reports/{id}/selections/` | POST | Create a manual table selection |
-| `/api/reports/{id}/selections/{sel_id}/` | PATCH | Update selection (approve/reject) |
-| `/api/reports/{id}/selections/{sel_id}/` | DELETE | Delete a selection |
-
-### Extraction Tasks
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/reports/{id}/detect-tables/` | POST | Trigger YOLO detection (creates pending selections) |
-| `/api/reports/{id}/extract-selections/` | POST | Extract tables from approved selections |
-
-### TableSelection Model
-
-```json
-{
-  "id": 1,
-  "report": 5,
-  "page_num": 1,
-  "x1": 10.5,
-  "y1": 20.0,
-  "x2": 90.5,
-  "y2": 80.0,
-  "source": "yolo",      // "yolo" or "manual"
-  "status": "pending",   // "pending", "approved", "rejected", "failed"
-  "confidence": 0.85
-}
-```
-
-## Development
-
-```bash
-# Run without Docker
-pip install -r requirements.txt
-python manage.py migrate
-python manage.py runserver
-
-# Start Celery worker (separate terminal)
-celery -A tablescan worker --loglevel=info
-```
-
-Requires: Python 3.9+, Redis, Poppler (`apt install poppler-utils`)
+| Endpoint | Description |
+|----------|-------------|
+| `POST /api/upload/` | Upload PDF |
+| `GET /api/reports/` | List reports |
+| `GET /api/reports/{id}/` | Get report with tables |
+| `POST /api/reports/{id}/detect-tables/` | Trigger YOLO detection |
+| `POST /api/reports/{id}/extract-selections/` | Extract approved selections |
+| `GET/POST /api/reports/{id}/selections/` | List/create selections |
+| `PATCH /api/reports/{id}/selections/{sel_id}/` | Update selection status |
 
 ## Project Structure
 
 ```
 ├── api/
-│   ├── views.py          # API + template views
-│   ├── tasks.py          # Celery extraction tasks
-│   ├── models.py         # Report, Extracted, TableSelection models
-│   └── scripts/          # YOLO + Camelot extraction engine
-├── templates/            # htmx/Tailwind frontend
-├── tablescan/            # Django settings + Celery config
+│   ├── views.py       # API + template views
+│   ├── tasks.py       # Celery extraction tasks
+│   ├── models.py      # Report, Extracted, TableSelection
+│   └── scripts/       # YOLO + Camelot extraction engine
+├── templates/         # htmx/Tailwind frontend
+├── tablescan/         # Django settings + Celery config
+├── Makefile           # Development commands
 ├── Dockerfile
-└── docker-compose.yml    # Django + Redis + Celery
+└── docker-compose.yml
 ```
