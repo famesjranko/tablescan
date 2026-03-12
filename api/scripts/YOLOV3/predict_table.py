@@ -366,6 +366,9 @@ def detect_tables(file_path, page_number, output_type, report_db, extract_dir,
         # Y-flip: PDF origin is bottom-left, canvas is top-left
         y1_pct = (1 - bbox['y1'] / float(page_height)) * 100
         y2_pct = (1 - bbox['y0'] / float(page_height)) * 100
+        # Ensure valid box: y1 < y2 (top < bottom in screen coords)
+        if y1_pct > y2_pct:
+            y1_pct, y2_pct = y2_pct, y1_pct
 
         # Create TableSelection record for this table
         selection = TableSelection.objects.create(

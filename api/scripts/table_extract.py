@@ -899,13 +899,20 @@ def extract(file_path: str, start_page: int, end_page: int,
                 # Use bounding box if available, otherwise use full page
                 if table_bboxes and len(table_bboxes) > 0:
                     bbox = table_bboxes[0]
-                    # Convert PDF coords to percentage (0-100)
-                    # bbox format: {'x0': left, 'y0': bottom, 'x1': right, 'y1': top} in PDF coords
-                    x1_pct = (bbox.get('x0', 0) / page_width) * 100
-                    x2_pct = (bbox.get('x1', page_width) / page_width) * 100
-                    # Y-flip: PDF origin is bottom-left, canvas is top-left
-                    y1_pct = (1 - bbox.get('y1', page_height) / page_height) * 100
-                    y2_pct = (1 - bbox.get('y0', 0) / page_height) * 100
+                    coords = _normalize_bbox(bbox)
+                    if coords:
+                        c0, c1, c2, c3 = coords
+                        # Convert to percentage (0-100)
+                        x1_pct = (c0 / page_width) * 100
+                        x2_pct = (c2 / page_width) * 100
+                        # Y-flip: PDF origin is bottom-left, screen is top-left
+                        y1_pct = (1 - c3 / page_height) * 100
+                        y2_pct = (1 - c1 / page_height) * 100
+                        # Ensure valid box: y1 < y2 (top < bottom in screen coords)
+                        if y1_pct > y2_pct:
+                            y1_pct, y2_pct = y2_pct, y1_pct
+                    else:
+                        x1_pct, y1_pct, x2_pct, y2_pct = 0, 0, 100, 100
                 else:
                     # Default to full page if no bbox
                     x1_pct, y1_pct, x2_pct, y2_pct = 0, 0, 100, 100
