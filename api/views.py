@@ -33,8 +33,6 @@ from .permissions import IsReportOwner
 from django.http import HttpResponse
 from django.conf import settings
 
-from .throttles import UploadRateThrottle, BurstRateThrottle
-
 from .serializers import *
 from .models import Extracted, Report, TableSelection
 from api.scripts import table_extract
@@ -489,7 +487,6 @@ class UploadView(APIView):
     """
 
     parser_classes = (MultiPartParser, FormParser)
-    throttle_classes = [UploadRateThrottle, BurstRateThrottle]
     permission_classes = [IsAuthenticated]
 
     def post(self, request, *args, **kwargs):
@@ -797,24 +794,6 @@ class UploadAsyncView(LoginRequiredMixin, View):
 
     def post(self, request):
         from api.tasks import extract_tables_task, detect_tables_for_review
-
-        # Apply rate limiting
-        upload_throttle = UploadRateThrottle()
-        burst_throttle = BurstRateThrottle()
-
-        # Check upload rate limit
-        if not upload_throttle.allow_request(request, self):
-            wait_time = upload_throttle.wait()
-            return JsonResponse({
-                'error': f'Upload rate limit exceeded. Try again in {int(wait_time)} seconds.'
-            }, status=429)
-
-        # Check burst rate limit
-        if not burst_throttle.allow_request(request, self):
-            wait_time = burst_throttle.wait()
-            return JsonResponse({
-                'error': f'Too many requests. Try again in {int(wait_time)} seconds.'
-            }, status=429)
 
         # Validate file exists
         if 'document' not in request.FILES:
