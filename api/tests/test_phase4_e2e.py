@@ -384,6 +384,35 @@ class TestXLSXExport:
         assert col_a_width is not None
         assert col_a_width >= 8  # Minimum width we set
 
+    def test_export_to_xlsx_handles_overlapping_spans(self, sample_dataframe, tmp_path):
+        """
+        XLSX export should handle overlapping spans gracefully.
+
+        When both cells array and header_spans try to merge the same region,
+        it should not raise 'MergedCell object attribute value is read-only'.
+        """
+        # Given: structure_json with overlapping span definitions
+        output_path = tmp_path / "test_table.xlsx"
+        structure_with_overlaps = {
+            "rows": 3,
+            "cols": 3,
+            "cells": [
+                {"row": 0, "col": 0, "value": "Header", "colspan": 2, "rowspan": 1},
+            ],
+            "header_spans": [
+                {"row": 0, "col": 0, "value": "Header", "colspan": 2, "rowspan": 1},
+            ]
+        }
+
+        # When: exporting to XLSX (should not raise exception)
+        export_to_xlsx(sample_dataframe, str(output_path), structure_json=structure_with_overlaps)
+
+        # Then: file is created successfully
+        wb = load_workbook(output_path)
+        ws = wb.active
+        merged_ranges = list(ws.merged_cells.ranges)
+        assert len(merged_ranges) >= 1
+
 
 class TestXLSXExportInPipeline:
     """Verify XLSX export is integrated into the extraction pipeline."""

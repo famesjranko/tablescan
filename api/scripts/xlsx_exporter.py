@@ -24,6 +24,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils.dataframe import dataframe_to_rows
 from openpyxl.utils import get_column_letter
+from openpyxl.cell.cell import MergedCell
 
 
 def export_to_xlsx(
@@ -110,6 +111,12 @@ def export_to_xlsx(
     return output_path
 
 
+def _is_cell_merged(ws, row: int, col: int) -> bool:
+    """Check if a cell is already part of a merged region."""
+    cell = ws.cell(row=row, column=col)
+    return isinstance(cell, MergedCell)
+
+
 def _apply_header_spans(
     ws,
     header_spans: list,
@@ -147,6 +154,10 @@ def _apply_header_spans(
             start_col = span["col"] + 1
             end_row = start_row + rowspan - 1
             end_col = start_col + colspan - 1
+
+            # Skip if start cell is already part of a merged region
+            if _is_cell_merged(ws, start_row, start_col):
+                continue
 
             # Merge cells
             ws.merge_cells(
@@ -204,6 +215,10 @@ def _apply_cell_spans(
             start_col = col + 1
             end_row = start_row + rowspan - 1
             end_col = start_col + colspan - 1
+
+            # Skip if start cell is already part of a merged region
+            if _is_cell_merged(ws, start_row, start_col):
+                continue
 
             # Merge cells
             ws.merge_cells(

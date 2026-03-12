@@ -328,23 +328,14 @@ export function createBookViewer(config) {
         },
 
         /**
-         * Select a table - highlight it and navigate only if needed
-         * Clicking the same table again will deselect it
+         * Select a table - highlight it and navigate to its page
          */
         selectTable(sel) {
-            // Toggle selection if clicking the same table
-            if (this.hoveredSelectionId === sel.id) {
-                this.hoveredSelectionId = null;
-                return;
-            }
-
-            // Highlight the selection
+            // Always highlight the selection
             this.hoveredSelectionId = sel.id;
 
-            // Only navigate if the page isn't already visible
-            if (!this.isPageVisible(sel.page_num)) {
-                this.goToPage(sel.page_num);
-            }
+            // Navigate to the page (goToPage already checks if already visible)
+            this.goToPage(sel.page_num);
         },
 
         /**

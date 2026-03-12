@@ -682,7 +682,7 @@
                         <!-- Approve/reject buttons for YOLO pending -->
                         <template x-if="isYoloPending(sel)">
                             <button
-                                @click="approveSelection(sel.id)"
+                                @click.stop="approveSelection(sel.id)"
                                 class="p-1 text-green-500 hover:text-green-700"
                                 title="Approve detection"
                             >
@@ -693,7 +693,7 @@
                         </template>
                         <template x-if="isYoloPending(sel)">
                             <button
-                                @click="rejectSelection(sel.id)"
+                                @click.stop="rejectSelection(sel.id)"
                                 class="p-1 text-red-400 hover:text-red-600"
                                 title="Reject detection"
                             >
@@ -705,7 +705,7 @@
                         <!-- Undo button for approved/rejected selections -->
                         <template x-if="sel.status === 'approved' || sel.status === 'rejected'">
                             <button
-                                @click="resetSelection(sel.id)"
+                                @click.stop="resetSelection(sel.id)"
                                 class="p-1 text-yellow-500 hover:text-yellow-600"
                                 title="Undo - return to pending"
                             >
@@ -715,17 +715,7 @@
                             </button>
                         </template>
                         <button
-                            @click="goToPage(sel.page_num)"
-                            class="p-1 text-gray-400 hover:text-gray-600"
-                            title="Go to page"
-                        >
-                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path>
-                            </svg>
-                        </button>
-                        <button
-                            @click="deleteSelection(sel.id)"
+                            @click.stop="deleteSelection(sel.id)"
                             class="p-1 text-gray-400 hover:text-red-600"
                             title="Delete selection"
                         >
