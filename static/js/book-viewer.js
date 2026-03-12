@@ -5,19 +5,30 @@
  * Uses PDF.js for rendering and provides zoom, navigation, and selection features.
  */
 
+console.log('[BookViewer] Module loading, importing PDF.js from CDN...');
+
 import * as pdfjsLib from 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.4.168/build/pdf.min.mjs';
+
+console.log('[BookViewer] PDF.js imported successfully:', pdfjsLib);
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.4.168/build/pdf.worker.min.mjs';
 
+// Global storage for PDF documents to avoid Alpine proxy issues
+const pdfDocStorage = new Map();
+
 export function createBookViewer(config) {
+    const instanceId = `pdf_${config.reportId}_${Date.now()}`;
+
     return {
         // Configuration
         reportId: config.reportId,
         pdfUrl: config.pdfUrl,
         extractionMode: config.extractionMode || 'auto',
+        _pdfInstanceId: instanceId,
 
-        // PDF state
-        pdfDoc: null,
+        // PDF state - use global storage to avoid proxy issues
+        getPdfDoc() { return pdfDocStorage.get(this._pdfInstanceId); },
+        setPdfDoc(doc) { pdfDocStorage.set(this._pdfInstanceId, doc); },
         totalPages: 0,
         currentSpread: 0,
         leftPageNum: 0,
@@ -29,6 +40,7 @@ export function createBookViewer(config) {
         mode: 'view',
         loading: true,
         renderingPages: false,
+        canvasReady: false,
         error: null,
         renderError: null,
 
@@ -37,6 +49,8 @@ export function createBookViewer(config) {
 
         // Selection state
         selections: [],
+        hoveredSelectionId: null,
+        selectionStyleVersion: 0,
         isDrawing: false,
         drawingPage: null,
         startX: 0,
@@ -55,28 +69,40 @@ export function createBookViewer(config) {
          * Initialize the viewer - load PDF and selections
          */
         async init() {
+            console.log('[BookViewer] init() called, pdfUrl:', this.pdfUrl);
             try {
                 this.loading = true;
                 this.error = null;
 
                 // Load the PDF document
+                console.log('[BookViewer] Loading PDF document...');
                 const loadingTask = pdfjsLib.getDocument(this.pdfUrl);
-                this.pdfDoc = await loadingTask.promise;
-                this.totalPages = this.pdfDoc.numPages;
+                this.setPdfDoc(await loadingTask.promise);
+                this.totalPages = this.getPdfDoc().numPages;
                 this.gotoPageInput = '1';
+                console.log('[BookViewer] PDF loaded, totalPages:', this.totalPages);
 
                 // Load page metadata (dimensions for all pages)
+                console.log('[BookViewer] Loading page metadata...');
                 await this.loadPageMetadata();
 
                 // Load existing selections from API
+                console.log('[BookViewer] Loading selections...');
                 await this.loadSelections();
 
                 // Render the first spread
+                console.log('[BookViewer] Rendering spread...');
                 await this.renderSpread();
 
+                console.log('[BookViewer] Init complete, setting loading=false');
                 this.loading = false;
+                // Wait for TWO frames to ensure browser has completed layout after container becomes visible
+                // First frame: container becomes visible, second frame: layout is computed
+                await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+                // Increment version to force Alpine to re-evaluate getSelectionStyle()
+                this.selectionStyleVersion++;
             } catch (err) {
-                console.error('Error loading PDF:', err);
+                console.error('[BookViewer] Error loading PDF:', err);
                 this.error = err.message || 'Failed to load PDF document';
                 this.loading = false;
             }
@@ -89,7 +115,7 @@ export function createBookViewer(config) {
             this.pageMetadata = [];
             for (let i = 1; i <= this.totalPages; i++) {
                 try {
-                    const page = await this.pdfDoc.getPage(i);
+                    const page = await this.getPdfDoc().getPage(i);
                     const viewport = page.getViewport({ scale: 1.0 });
                     this.pageMetadata.push({
                         width: viewport.width,
@@ -126,6 +152,7 @@ export function createBookViewer(config) {
          * Render current spread (two pages side-by-side)
          */
         async renderSpread() {
+            this.canvasReady = false;
             this.leftPageNum = this.currentSpread * 2 + 1;
             this.rightPageNum = this.currentSpread * 2 + 2;
             this.renderError = null;
@@ -142,6 +169,13 @@ export function createBookViewer(config) {
                     // Clear right canvas for single page or odd page count
                     this.clearCanvas('right-page-canvas');
                 }
+                // Wait for browser to layout canvas before updating selections
+                // getBoundingClientRect() needs a frame to return correct dimensions
+                await new Promise(resolve => requestAnimationFrame(resolve));
+                this.canvasReady = true;
+                // Force Alpine to re-evaluate selection styles by reassigning array
+                // This triggers x-for to re-render with correct canvas dimensions
+                this.selections = [...this.selections];
             } catch (err) {
                 console.error('Error rendering spread:', err);
                 this.renderError = err.message || 'Failed to render pages';
@@ -163,7 +197,7 @@ export function createBookViewer(config) {
             }
 
             try {
-                const page = await this.pdfDoc.getPage(pageNum);
+                const page = await this.getPdfDoc().getPage(pageNum);
                 const scale = 1.5; // Base scale for good quality
                 const viewport = page.getViewport({ scale });
 
@@ -317,24 +351,83 @@ export function createBookViewer(config) {
         },
 
         /**
+         * Set the currently hovered selection ID for highlighting correlation
+         * @param {number|null} id - Selection ID or null to clear
+         */
+        setHoveredSelection(id) {
+            this.hoveredSelectionId = id;
+        },
+
+        /**
+         * Get formatted label for a selection (e.g., "#1 - Page 2 (upper)")
+         * @param {Object} sel - Selection object
+         * @param {number} idx - Index in selections array
+         * @returns {string}
+         */
+        getSelectionLabel(sel, idx) {
+            const index = idx + 1;
+            let position = '';
+            // Add position hint based on y1 coordinate (percentage)
+            if (sel.y1 < 33) {
+                position = ' (upper)';
+            } else if (sel.y1 < 66) {
+                position = ' (middle)';
+            } else {
+                position = ' (lower)';
+            }
+            return `#${index} - Page ${sel.page_num}${position}`;
+        },
+
+        /**
          * Calculate selection box style for overlay
          */
         getSelectionStyle(sel, side) {
-            const container = document.getElementById(`${side}-page-container`);
+            // Reference reactive properties to force Alpine to re-evaluate when they change
+            const _version = this.selectionStyleVersion;
+            if (!this.canvasReady) {
+                return { display: 'none' };
+            }
             const canvas = document.getElementById(`${side}-page-canvas`);
-            if (!container || !canvas || canvas.width === 0) {
+            if (!canvas || canvas.width === 0) {
                 return { display: 'none' };
             }
 
-            // Scale coordinates from percentage to canvas pixels
-            const scaleX = canvas.width / 100;
-            const scaleY = canvas.height / 100;
+            // Use CSS display dimensions since overlay is positioned in CSS pixels
+            const rect = canvas.getBoundingClientRect();
+            // Container might be visible but not yet laid out - wait for valid dimensions
+            if (rect.width === 0 || rect.height === 0) {
+                return { display: 'none' };
+            }
+            const scaleX = rect.width / 100;
+            const scaleY = rect.height / 100;
 
             return {
                 left: (sel.x1 * scaleX) + 'px',
                 top: (sel.y1 * scaleY) + 'px',
                 width: ((sel.x2 - sel.x1) * scaleX) + 'px',
                 height: ((sel.y2 - sel.y1) * scaleY) + 'px'
+            };
+        },
+
+        /**
+         * Calculate preview box style while drawing
+         */
+        getDrawingPreviewStyle(side) {
+            if (!this.isDrawing || this.drawingPage !== side) {
+                return { display: 'none' };
+            }
+
+            // Handle dragging in any direction
+            const left = Math.min(this.startX, this.currentX);
+            const top = Math.min(this.startY, this.currentY);
+            const width = Math.abs(this.currentX - this.startX);
+            const height = Math.abs(this.currentY - this.startY);
+
+            return {
+                left: left + 'px',
+                top: top + 'px',
+                width: width + 'px',
+                height: height + 'px'
             };
         },
 
@@ -365,9 +458,10 @@ export function createBookViewer(config) {
             const canvas = container?.querySelector('canvas');
             if (!canvas) return;
 
+            // Use CSS display size (rect) since mouse coords are in CSS pixels
             const rect = canvas.getBoundingClientRect();
-            this.currentX = Math.max(0, Math.min(event.clientX - rect.left, canvas.width));
-            this.currentY = Math.max(0, Math.min(event.clientY - rect.top, canvas.height));
+            this.currentX = Math.max(0, Math.min(event.clientX - rect.left, rect.width));
+            this.currentY = Math.max(0, Math.min(event.clientY - rect.top, rect.height));
         },
 
         /**
@@ -384,10 +478,12 @@ export function createBookViewer(config) {
             const pageNum = this.drawingPage === 'left' ? this.leftPageNum : this.rightPageNum;
 
             // Convert to percentage coordinates
-            const x1 = Math.min(this.startX, this.currentX) / canvas.width * 100;
-            const y1 = Math.min(this.startY, this.currentY) / canvas.height * 100;
-            const x2 = Math.max(this.startX, this.currentX) / canvas.width * 100;
-            const y2 = Math.max(this.startY, this.currentY) / canvas.height * 100;
+            // Use getBoundingClientRect() for display size since mouse coords are in CSS pixels
+            const rect = canvas.getBoundingClientRect();
+            const x1 = Math.min(this.startX, this.currentX) / rect.width * 100;
+            const y1 = Math.min(this.startY, this.currentY) / rect.height * 100;
+            const x2 = Math.max(this.startX, this.currentX) / rect.width * 100;
+            const y2 = Math.max(this.startY, this.currentY) / rect.height * 100;
 
             // Minimum size check (ignore accidental clicks)
             if (Math.abs(x2 - x1) < 2 || Math.abs(y2 - y1) < 2) {
