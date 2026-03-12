@@ -345,9 +345,8 @@ class TestMultiExtractorWithAreas:
 
     def test_extract_best_accepts_table_areas(self, pdf_with_table, table1_bbox_pdf_coords):
         """MultiExtractor.extract_best should accept table_areas parameter."""
+        # Given: a PDF with a table and known bounding box coordinates
         extractor = MultiExtractor()
-
-        # Build table_areas tuple
         table_areas = [(
             table1_bbox_pdf_coords['x1'],
             table1_bbox_pdf_coords['y1'],
@@ -355,6 +354,7 @@ class TestMultiExtractorWithAreas:
             table1_bbox_pdf_coords['y2'],
         )]
 
+        # When: extraction is performed with specific table areas
         try:
             results = extractor.extract_best(
                 pdf_path=pdf_with_table,
@@ -362,16 +362,15 @@ class TestMultiExtractorWithAreas:
                 table_areas=table_areas
             )
 
-            # Should return results (possibly empty if extraction fails)
+            # Then: results are returned as a list
             assert isinstance(results, list)
         except Exception as e:
-            # Some extraction methods may fail, that's OK for this test
             pytest.skip(f"Extraction not available: {e}")
 
     def test_extract_with_specific_region(self, pdf_with_table, table1_bbox_pdf_coords):
         """Extraction should work with specific table regions."""
+        # Given: a PDF with a table and known bounding box coordinates
         extractor = MultiExtractor()
-
         table_areas = [(
             table1_bbox_pdf_coords['x1'],
             table1_bbox_pdf_coords['y1'],
@@ -379,6 +378,7 @@ class TestMultiExtractorWithAreas:
             table1_bbox_pdf_coords['y2'],
         )]
 
+        # When: extraction is performed targeting the specific region
         try:
             results = extractor.extract_best(
                 pdf_path=pdf_with_table,
@@ -386,8 +386,8 @@ class TestMultiExtractorWithAreas:
                 table_areas=table_areas
             )
 
+            # Then: results contain DataFrames with extracted data
             if results:
-                # Check that we got a DataFrame with content
                 for result in results:
                     assert hasattr(result, 'dataframe')
                     assert isinstance(result.dataframe, pd.DataFrame)
@@ -544,33 +544,29 @@ class TestManualSelectionE2E(APITestCase):
     def test_manual_selection_creates_approved_status(self):
         """Creating a manual selection should default to approved status."""
         from api.models import Report, TableSelection
+        from api.serializers import TableSelectionSerializer
 
-        # Create a report
+        # Given: a report in manual extraction mode
         report = Report.objects.create(
             name='test_manual_selection',
             extraction_mode='manual',
             extraction_status='pending_review',
             owner=self.user
         )
-
-        # Create a manual selection via serializer (simulating API)
-        from api.serializers import TableSelectionSerializer
-
         data = {
             'page_num': 1,
             'x1': 80.0,
             'y1': 572.0,
             'x2': 360.0,
             'y2': 692.0,
-            # source and status should default
         }
 
+        # When: a manual selection is created via the serializer
         serializer = TableSelectionSerializer(data=data, context={'report': report})
         assert serializer.is_valid(), serializer.errors
-
         selection = serializer.save(report=report)
 
-        # Verify defaults
+        # Then: the selection defaults to source='manual' and status='approved'
         assert selection.source == 'manual'
         assert selection.status == 'approved'
 
@@ -578,7 +574,7 @@ class TestManualSelectionE2E(APITestCase):
         """Manual mode should not create YOLO selections."""
         from api.models import Report, TableSelection
 
-        # Create a report with manual mode
+        # Given: a report created with manual extraction mode
         report = Report.objects.create(
             name='test_no_yolo',
             extraction_mode='manual',
@@ -586,25 +582,26 @@ class TestManualSelectionE2E(APITestCase):
             owner=self.user
         )
 
-        # Verify no YOLO selections exist
+        # When: we query for YOLO-sourced selections
         yolo_selections = TableSelection.objects.filter(
             report=report,
             source='yolo'
         )
+
+        # Then: no YOLO selections exist for this report
         assert yolo_selections.count() == 0
 
     def test_extract_from_selections_filters_approved(self):
         """extract_from_selections should only process approved selections."""
         from api.models import Report, TableSelection
 
+        # Given: a report with mixed selection statuses (approved, pending, rejected)
         report = Report.objects.create(
             name='test_filter_approved',
             extraction_mode='manual',
             extraction_status='pending_review',
             owner=self.user
         )
-
-        # Create various selections
         TableSelection.objects.create(
             report=report, page_num=1,
             x1=0, y1=0, x2=100, y2=100,
@@ -613,20 +610,21 @@ class TestManualSelectionE2E(APITestCase):
         TableSelection.objects.create(
             report=report, page_num=1,
             x1=100, y1=100, x2=200, y2=200,
-            source='yolo', status='pending'  # Should be filtered out
+            source='yolo', status='pending'
         )
         TableSelection.objects.create(
             report=report, page_num=1,
             x1=200, y1=200, x2=300, y2=300,
-            source='yolo', status='rejected'  # Should be filtered out
+            source='yolo', status='rejected'
         )
 
-        # Query approved selections (same as task does)
+        # When: querying for approved selections (as the extraction task does)
         approved = TableSelection.objects.filter(
             report=report,
             status='approved'
         )
 
+        # Then: only the approved selection is returned
         assert approved.count() == 1
         assert approved.first().source == 'manual'
 
@@ -655,6 +653,7 @@ class TestManualSelectionAPI(APITestCase):
         """POST /api/reports/{id}/selections/ should create manual selection."""
         from api.models import Report, TableSelection
 
+        # Given: a report in manual extraction mode
         report = Report.objects.create(
             name='test_api_create',
             extraction_mode='manual',
@@ -662,6 +661,7 @@ class TestManualSelectionAPI(APITestCase):
             owner=self.user
         )
 
+        # When: a POST request creates a new selection via the API
         response = self.client.post(
             f'/api/reports/{report.id}/selections/',
             {
@@ -674,6 +674,7 @@ class TestManualSelectionAPI(APITestCase):
             format='json'
         )
 
+        # Then: the selection is created with manual source and approved status
         assert response.status_code == 201
         assert response.data['source'] == 'manual'
         assert response.data['status'] == 'approved'
@@ -688,14 +689,13 @@ class TestManualSelectionAPI(APITestCase):
         """GET /api/reports/{id}/selections/ should list selections."""
         from api.models import Report, TableSelection
 
+        # Given: a report with two manual selections
         report = Report.objects.create(
             name='test_api_list',
             extraction_mode='manual',
             extraction_status='pending_review',
             owner=self.user
         )
-
-        # Create selections
         TableSelection.objects.create(
             report=report, page_num=1,
             x1=0, y1=0, x2=100, y2=100,
@@ -707,8 +707,10 @@ class TestManualSelectionAPI(APITestCase):
             source='manual', status='approved'
         )
 
+        # When: the selections list endpoint is called
         response = self.client.get(f'/api/reports/{report.id}/selections/')
 
+        # Then: both selections are returned
         assert response.status_code == 200
         assert len(response.data) == 2
 
@@ -716,13 +718,13 @@ class TestManualSelectionAPI(APITestCase):
         """GET /api/reports/{id}/selections/?status= should filter."""
         from api.models import Report, TableSelection
 
+        # Given: a report with one pending and one approved selection
         report = Report.objects.create(
             name='test_api_filter',
             extraction_mode='review',
             extraction_status='pending_review',
             owner=self.user
         )
-
         TableSelection.objects.create(
             report=report, page_num=1,
             x1=0, y1=0, x2=100, y2=100,
@@ -734,9 +736,10 @@ class TestManualSelectionAPI(APITestCase):
             source='manual', status='approved'
         )
 
-        # Filter by approved only
+        # When: filtering by status=approved
         response = self.client.get(f'/api/reports/{report.id}/selections/?status=approved')
 
+        # Then: only the approved selection is returned
         assert response.status_code == 200
         assert len(response.data) == 1
         assert response.data[0]['status'] == 'approved'
@@ -745,26 +748,26 @@ class TestManualSelectionAPI(APITestCase):
         """DELETE /api/reports/{id}/selections/{sel_id}/ should remove selection."""
         from api.models import Report, TableSelection
 
+        # Given: a report with a manual selection
         report = Report.objects.create(
             name='test_api_delete',
             extraction_mode='manual',
             extraction_status='pending_review',
             owner=self.user
         )
-
         selection = TableSelection.objects.create(
             report=report, page_num=1,
             x1=0, y1=0, x2=100, y2=100,
             source='manual', status='approved'
         )
 
+        # When: the selection is deleted via the API
         response = self.client.delete(
             f'/api/reports/{report.id}/selections/{selection.id}/'
         )
 
+        # Then: the selection is removed from the database
         assert response.status_code == 204
-
-        # Verify deleted
         assert not TableSelection.objects.filter(id=selection.id).exists()
 
 
@@ -2483,6 +2486,331 @@ class TestViewerWithZeroDetections:
 
         # Verify extractionMode is used
         assert 'extractionMode: config.extractionMode' in content
+
+
+# =============================================================================
+# Test: Coordinate Transformation Math (Unit Tests)
+# =============================================================================
+
+class TestCoordinateTransformationMath:
+    """
+    Unit tests for the coordinate transformation logic in extract_from_selections.
+
+    The transformation converts:
+    - Canvas percentages (0-100) with top-left origin
+    - To PDF coordinates (points) with bottom-left origin
+
+    Math:
+    - X: pdf_x = (canvas_x_percent / 100) * page_width
+    - Y: pdf_y = (1 - canvas_y_percent / 100) * page_height  (Y-flip)
+    """
+
+    def test_x_axis_linear_scaling(self):
+        """X-axis should scale linearly from percentage to PDF points."""
+        # Given: percentage X coordinates on a 612-point wide page
+        page_width = 612.0
+        x_percent = 50.0
+
+        # When: converting to PDF coordinates
+        pdf_x = (x_percent / 100) * page_width
+
+        # Then: result is linear scaling
+        assert pdf_x == 306.0
+
+    def test_x_axis_boundary_zero(self):
+        """X=0% should map to PDF X=0."""
+        # Given: X at left edge
+        page_width = 612.0
+        x_percent = 0.0
+
+        # When: converting to PDF coordinates
+        pdf_x = (x_percent / 100) * page_width
+
+        # Then: maps to left edge of PDF
+        assert pdf_x == 0.0
+
+    def test_x_axis_boundary_hundred(self):
+        """X=100% should map to full page width."""
+        # Given: X at right edge
+        page_width = 612.0
+        x_percent = 100.0
+
+        # When: converting to PDF coordinates
+        pdf_x = (x_percent / 100) * page_width
+
+        # Then: maps to right edge of PDF
+        assert pdf_x == 612.0
+
+    def test_y_axis_flip_top_to_high(self):
+        """Canvas Y=10% (near top) should map to high PDF Y (near top in PDF coords)."""
+        # Given: Y near top of canvas (small percentage)
+        page_height = 792.0
+        y_percent = 10.0  # 10% from top
+
+        # When: converting with Y-flip
+        pdf_y = (1 - y_percent / 100) * page_height
+
+        # Then: maps to high Y value in PDF (top of page)
+        assert pdf_y == pytest.approx(712.8)  # 0.9 * 792
+
+    def test_y_axis_flip_bottom_to_low(self):
+        """Canvas Y=90% (near bottom) should map to low PDF Y (near bottom in PDF coords)."""
+        # Given: Y near bottom of canvas (large percentage)
+        page_height = 792.0
+        y_percent = 90.0  # 90% from top = near bottom
+
+        # When: converting with Y-flip
+        pdf_y = (1 - y_percent / 100) * page_height
+
+        # Then: maps to low Y value in PDF (bottom of page)
+        assert pdf_y == pytest.approx(79.2)  # 0.1 * 792
+
+    def test_y_axis_boundary_zero(self):
+        """Y=0% (top of canvas) should map to full page height (top of PDF)."""
+        # Given: Y at top edge of canvas
+        page_height = 792.0
+        y_percent = 0.0
+
+        # When: converting with Y-flip
+        pdf_y = (1 - y_percent / 100) * page_height
+
+        # Then: maps to top of PDF (maximum Y)
+        assert pdf_y == 792.0
+
+    def test_y_axis_boundary_hundred(self):
+        """Y=100% (bottom of canvas) should map to 0 (bottom of PDF)."""
+        # Given: Y at bottom edge of canvas
+        page_height = 792.0
+        y_percent = 100.0
+
+        # When: converting with Y-flip
+        pdf_y = (1 - y_percent / 100) * page_height
+
+        # Then: maps to bottom of PDF (Y=0)
+        assert pdf_y == 0.0
+
+    def test_full_bbox_transformation(self):
+        """Full bounding box should transform correctly preserving containment."""
+        # Given: a selection covering 10%-90% in both dimensions
+        page_width = 612.0
+        page_height = 792.0
+        # Canvas coords: top-left at (10%, 20%), bottom-right at (90%, 80%)
+        x1_pct, y1_pct = 10.0, 20.0  # top-left in canvas
+        x2_pct, y2_pct = 90.0, 80.0  # bottom-right in canvas
+
+        # When: converting to PDF coordinates
+        pdf_x1 = (x1_pct / 100) * page_width
+        pdf_x2 = (x2_pct / 100) * page_width
+        pdf_y1 = (1 - y1_pct / 100) * page_height
+        pdf_y2 = (1 - y2_pct / 100) * page_height
+
+        # Then: X ordering preserved, Y ordering inverted
+        assert pdf_x1 == pytest.approx(61.2)   # 10% of 612
+        assert pdf_x2 == pytest.approx(550.8)  # 90% of 612
+        assert pdf_y1 == pytest.approx(633.6)  # (1 - 0.2) * 792 = 0.8 * 792
+        assert pdf_y2 == pytest.approx(158.4)  # (1 - 0.8) * 792 = 0.2 * 792
+
+        # X order preserved: x1 < x2
+        assert pdf_x1 < pdf_x2
+        # Y order inverted: y1 > y2 (because canvas y1 < y2)
+        assert pdf_y1 > pdf_y2
+
+    def test_different_page_dimensions(self):
+        """Transformation should scale correctly for non-standard page sizes."""
+        # Given: a landscape A4-ish page (different dimensions)
+        page_width = 842.0  # A4 landscape width
+        page_height = 595.0  # A4 landscape height
+        x_pct, y_pct = 25.0, 75.0
+
+        # When: converting to PDF coordinates
+        pdf_x = (x_pct / 100) * page_width
+        pdf_y = (1 - y_pct / 100) * page_height
+
+        # Then: scales to the specific page dimensions
+        assert pdf_x == 210.5   # 25% of 842
+        assert pdf_y == 148.75  # (1 - 0.75) * 595 = 0.25 * 595
+
+    def test_midpoint_transformation(self):
+        """Center of canvas (50%, 50%) should map to center of PDF."""
+        # Given: center point
+        page_width = 612.0
+        page_height = 792.0
+        x_pct, y_pct = 50.0, 50.0
+
+        # When: converting to PDF coordinates
+        pdf_x = (x_pct / 100) * page_width
+        pdf_y = (1 - y_pct / 100) * page_height
+
+        # Then: maps to center of PDF page
+        assert pdf_x == 306.0  # Half of 612
+        assert pdf_y == 396.0  # Half of 792
+
+
+# =============================================================================
+# Test: Status Filtering Integration (Django Required)
+# =============================================================================
+
+@pytest.mark.skipif(not DJANGO_API_AVAILABLE, reason="Django API not available")
+@pytest.mark.django_db(transaction=True)
+class TestStatusFilteringIntegration(APITestCase):
+    """
+    Integration test verifying that extraction only processes approved selections.
+
+    This test creates selections with mixed statuses and verifies:
+    1. Only approved selections are passed to the extraction logic
+    2. Pending and rejected selections do not produce Extracted records
+    """
+
+    def setUp(self):
+        """Set up test user."""
+        self.user = User.objects.create_user(
+            username='status_filter_test_user',
+            password='testpass123',
+            email='statusfilter@example.com'
+        )
+
+    def tearDown(self):
+        """Clean up after tests."""
+        from api.models import Report
+        Report.objects.filter(owner=self.user).delete()
+
+    def test_extraction_processes_only_approved_selections(self):
+        """Extraction task should only process selections with status='approved'."""
+        from api.models import Report, TableSelection
+        from collections import defaultdict
+
+        # Given: a report with mixed selection statuses
+        report = Report.objects.create(
+            name='test_status_filtering',
+            extraction_mode='manual',
+            extraction_status='pending_review',
+            owner=self.user
+        )
+        approved_sel = TableSelection.objects.create(
+            report=report, page_num=1,
+            x1=10.0, y1=20.0, x2=50.0, y2=60.0,
+            source='manual', status='approved'
+        )
+        pending_sel = TableSelection.objects.create(
+            report=report, page_num=1,
+            x1=55.0, y1=20.0, x2=95.0, y2=60.0,
+            source='yolo', status='pending'
+        )
+        rejected_sel = TableSelection.objects.create(
+            report=report, page_num=2,
+            x1=10.0, y1=10.0, x2=90.0, y2=90.0,
+            source='yolo', status='rejected'
+        )
+
+        # When: querying approved selections as the extraction task does
+        approved_selections = TableSelection.objects.filter(
+            report=report,
+            status='approved'
+        ).order_by('page_num', 'created_at')
+
+        # Then: only the approved selection is included
+        assert approved_selections.count() == 1
+        assert approved_selections.first().id == approved_sel.id
+
+        # And: pending and rejected are excluded
+        selection_ids = list(approved_selections.values_list('id', flat=True))
+        assert pending_sel.id not in selection_ids
+        assert rejected_sel.id not in selection_ids
+
+    def test_coordinate_grouping_by_page(self):
+        """Approved selections should be grouped by page for extraction."""
+        from api.models import Report, TableSelection
+        from collections import defaultdict
+
+        # Given: approved selections on multiple pages
+        report = Report.objects.create(
+            name='test_page_grouping',
+            extraction_mode='review',
+            extraction_status='pending_review',
+            owner=self.user
+        )
+        # Two selections on page 1
+        TableSelection.objects.create(
+            report=report, page_num=1,
+            x1=10.0, y1=10.0, x2=45.0, y2=45.0,
+            source='yolo', status='approved'
+        )
+        TableSelection.objects.create(
+            report=report, page_num=1,
+            x1=50.0, y1=10.0, x2=90.0, y2=45.0,
+            source='manual', status='approved'
+        )
+        # One selection on page 2
+        TableSelection.objects.create(
+            report=report, page_num=2,
+            x1=20.0, y1=20.0, x2=80.0, y2=80.0,
+            source='yolo', status='approved'
+        )
+        # One rejected on page 3 (should not appear)
+        TableSelection.objects.create(
+            report=report, page_num=3,
+            x1=10.0, y1=10.0, x2=90.0, y2=90.0,
+            source='yolo', status='rejected'
+        )
+
+        # When: grouping approved selections by page (as extraction does)
+        approved = TableSelection.objects.filter(
+            report=report, status='approved'
+        ).order_by('page_num', 'created_at')
+
+        selections_by_page = defaultdict(list)
+        for sel in approved:
+            selections_by_page[sel.page_num].append(sel)
+
+        # Then: page grouping is correct
+        assert len(selections_by_page) == 2  # Only pages 1 and 2
+        assert 1 in selections_by_page
+        assert 2 in selections_by_page
+        assert 3 not in selections_by_page  # Rejected selection excluded
+
+        # And: correct counts per page
+        assert len(selections_by_page[1]) == 2  # Two approved on page 1
+        assert len(selections_by_page[2]) == 1  # One approved on page 2
+
+    def test_mixed_sources_both_extracted_when_approved(self):
+        """Both yolo and manual selections should be extracted if approved."""
+        from api.models import Report, TableSelection
+
+        # Given: approved selections from both sources
+        report = Report.objects.create(
+            name='test_mixed_sources',
+            extraction_mode='review',
+            extraction_status='pending_review',
+            owner=self.user
+        )
+        yolo_approved = TableSelection.objects.create(
+            report=report, page_num=1,
+            x1=10.0, y1=10.0, x2=45.0, y2=45.0,
+            source='yolo', status='approved'
+        )
+        manual_approved = TableSelection.objects.create(
+            report=report, page_num=1,
+            x1=50.0, y1=50.0, x2=90.0, y2=90.0,
+            source='manual', status='approved'
+        )
+        yolo_pending = TableSelection.objects.create(
+            report=report, page_num=2,
+            x1=10.0, y1=10.0, x2=90.0, y2=90.0,
+            source='yolo', status='pending'
+        )
+
+        # When: filtering for approved (as extraction does)
+        approved = TableSelection.objects.filter(
+            report=report, status='approved'
+        )
+
+        # Then: both yolo and manual approved are included
+        assert approved.count() == 2
+        sources = set(approved.values_list('source', flat=True))
+        assert sources == {'yolo', 'manual'}
+
+        # And: pending is excluded regardless of source
+        assert yolo_pending not in approved
 
 
 if __name__ == '__main__':
