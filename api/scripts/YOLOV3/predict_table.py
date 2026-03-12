@@ -41,6 +41,7 @@ import datetime as date
 from camelot import io as camelot
 
 from time import sleep
+import uuid
 
 import numpy as np
 import pandas as pd
@@ -408,10 +409,13 @@ def detect_tables(file_path, page_number, output_type, report_db, extract_dir,
         if i < len(report) and report[i]:
             confidence = report[i].get('accuracy', 0) / 100.0  # Convert 0-100 to 0-1
 
+        # Short unique ID to prevent django-cleanup conflicts (deferred deletion)
+        uid = uuid.uuid4().hex[:6]
+
         for key, value in extract_dir.items():
-            # build path for file and export
-            e_name = filename[:-4] + "-" + str(pg) + "-table-" + str(i) + "." + key
-            e_path = PurePath.joinpath(value, e_name)
+            # build path for file and export (simplified naming)
+            e_name = f"p{pg}_t{i}_{uid}.{key}"
+            e_path = value / e_name
 
             # export to file
             if key == "csv":
@@ -733,9 +737,13 @@ def save_extraction_results(results: List[ExtractionResult], file_path: str,
         # Export to each file type
         db = result.dataframe
 
+        # Short unique ID to prevent django-cleanup conflicts (deferred deletion)
+        uid = uuid.uuid4().hex[:6]
+
         for key, value in extract_dir.items():
-            e_name = filename[:-4] + "-" + str(page_num) + "-table-" + str(i) + "." + key
-            e_path = PurePath.joinpath(value, e_name)
+            # Simplified naming with unique suffix
+            e_name = f"p{page_num}_t{i}_{uid}.{key}"
+            e_path = value / e_name
 
             if key == "csv":
                 db.to_csv(str(e_path), index=False)
@@ -761,8 +769,9 @@ def save_extraction_results(results: List[ExtractionResult], file_path: str,
             # Build cleaned path for database
             db_path = PurePath(PurePath(e_path).parts[-3], key, PurePath(e_path).name)
 
+
             # Create database instance with rich fields (US-017)
-            Extracted.objects.create(
+            new_ext = Extracted.objects.create(
                 report=report_db,
                 file=str(db_path),
                 f_type=key,

@@ -45,6 +45,10 @@ function tableCard{{ table.id }}() {
                         this.loading = true;
                         try {
                             const previewResp = await fetch(data.preview_url);
+                            if (!previewResp.ok) {
+                                console.error('Preview failed:', previewResp.status);
+                                return;
+                            }
                             this.previewData = await previewResp.json();
                         } catch (e) {
                             console.error('Failed to load preview:', e);

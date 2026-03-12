@@ -26,6 +26,7 @@ from rest_framework.decorators import action
 
 from django_filters.rest_framework import DjangoFilterBackend
 from django.db.models import Count, Q
+from django.db import transaction
 
 from .permissions import IsReportOwner
 
@@ -319,41 +320,40 @@ class ExtractedViewSet(viewsets.ModelViewSet):
             "xlsx": working_dir / "xlsx",
         }
 
-        # Delete old Extracted records for this selection
-        old_extractions = Extracted.objects.filter(
-            report=report,
-            selection_id=extracted.selection_id
-        )
 
-        # Delete old files
-        for old_ext in old_extractions:
-            if old_ext.file:
-                try:
-                    file_path = Path(settings.MEDIA_ROOT) / old_ext.file.name
-                    if file_path.exists():
-                        file_path.unlink()
-                except Exception:
-                    pass
+        # Ensure output directories exist
+        for dir_path in extract_dir.values():
+            dir_path.mkdir(parents=True, exist_ok=True)
 
-        old_extractions.delete()
+        # Use transaction with select_for_update to prevent concurrent modifications
+        with transaction.atomic():
+            # Lock the selection to prevent race conditions
+            TableSelection.objects.select_for_update().get(pk=extracted.selection_id)
 
-        # Create new ExtractionResult and save
-        new_result = ExtractionResult(
-            dataframe=chosen['dataframe'],
-            confidence=chosen.get('confidence', 0),
-            method=chosen['method'],
-            metadata=chosen.get('metadata', {})
-        )
+            # Delete old records FIRST - django-cleanup will remove old files
+            # This must happen before creating new files with same names
+            Extracted.objects.filter(
+                report=report,
+                selection_id=extracted.selection_id
+            ).delete()
 
-        save_extraction_results(
-            results=[new_result],
-            file_path=report.document.path,
-            page_num=extracted.page_num,
-            report_db=report,
-            extract_dir=extract_dir,
-            page_type=extracted.page_type,
-            selection=extracted.selection
-        )
+            # Create new ExtractionResult and save (files now have unique paths)
+            new_result = ExtractionResult(
+                dataframe=chosen['dataframe'],
+                confidence=chosen.get('confidence', 0),
+                method=chosen['method'],
+                metadata=chosen.get('metadata', {})
+            )
+
+            save_extraction_results(
+                results=[new_result],
+                file_path=report.document.path,
+                page_num=extracted.page_num,
+                report_db=report,
+                extract_dir=extract_dir,
+                page_type=extracted.page_type,
+                selection=extracted.selection
+            )
 
         # Query for newly created Extracted record
         new_extracted = Extracted.objects.filter(
@@ -720,7 +720,7 @@ class ReportDeleteView(View):
         return redirect('reports_list')
 
 
-class TablePreviewView(View):
+class TablePreviewView(LoginRequiredMixin, View):
     """AJAX endpoint to preview CSV table contents"""
 
     def get(self, request, pk):
@@ -729,8 +729,12 @@ class TablePreviewView(View):
         if not extracted.file or extracted.f_type != 'csv':
             return JsonResponse({'error': 'No CSV file available'}, status=404)
 
+        file_path = extracted.file.path
+        if not Path(file_path).exists():
+            return JsonResponse({'error': f'File not found: {extracted.file.name}'}, status=404)
+
         try:
-            with open(extracted.file.path, 'r', encoding='utf-8') as f:
+            with open(file_path, 'r', encoding='utf-8') as f:
                 reader = csv.reader(f)
                 rows = list(reader)
 
@@ -854,15 +858,13 @@ class UploadAsyncView(LoginRequiredMixin, View):
         report = report_serializer.save(owner=request.user)
 
         # Get file path from saved report
-        file_url = report_serializer.data['document']
-        full_path = Path(file_url)
-        base_dir = full_path.parts[3]
-        file_name = full_path.name
-        file_path = str(PurePath(settings.MEDIA_ROOT, base_dir, file_name))
+        file_path = report.document.path
+        file_name = Path(file_path).name
 
         # Update report with name, type, and extraction mode
-        report.name = base_dir
-        report.f_type = file_name.split('.')[1]
+        # Use the original filename (without extension) as the display name
+        report.name = Path(file_name).stem
+        report.f_type = Path(file_name).suffix.lstrip('.')
         report.extraction_mode = extraction_mode
 
         # Get total page count for proper multi-page handling
