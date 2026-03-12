@@ -3,16 +3,17 @@ multi_extractor.py
     Multi-extractor pipeline for running multiple extraction backends
     and selecting the best result using scoring.
 
-    Provides a unified interface for running Camelot and pdfplumber
-    extractors in parallel with automatic best-result selection.
+    Provides a unified interface for running Camelot, pdfplumber, and
+    vision extractors with automatic best-result selection.
 """
 
 import logging
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from .base import ExtractionResult
 from .camelot_extractor import CamelotExtractor
 from .pdfplumber_extractor import PdfplumberExtractor
+from .vision_extractor import VisionExtractor
 from .scorer import ExtractionScorer
 
 
@@ -23,9 +24,9 @@ class MultiExtractor:
     """
     Runs multiple extraction backends and selects the best result.
 
-    For born-digital PDFs, runs both Camelot (lattice + stream) and
-    pdfplumber extractors, then uses ExtractionScorer to select
-    the highest-quality result for each table.
+    For born-digital PDFs, runs Camelot (lattice + stream), pdfplumber
+    (default + explicit), and vision extractors, then uses ExtractionScorer
+    to select the highest-quality result for each table.
 
     Attributes:
         scorer: ExtractionScorer instance for comparing results.
@@ -36,17 +37,122 @@ class MultiExtractor:
         """Initialize MultiExtractor with default extractors and scorer."""
         self._scorer = ExtractionScorer()
 
-        # Initialize extractors
+        # Initialize all extractors
+        # - camelot_lattice: For tables with visible borders/gridlines
+        # - camelot_stream: For borderless tables (whitespace analysis)
+        # - pdfplumber: Default 'lines' strategy (requires visible lines)
+        # - pdfplumber_text: 'text' strategy for borderless tables (text alignment)
+        # - img2table: Vision-based extraction
+        # Note: pdfplumber_explicit removed - requires explicit line coordinates
         self._extractors = [
             CamelotExtractor(flavor='lattice'),
             CamelotExtractor(flavor='stream'),
             PdfplumberExtractor(),
+            PdfplumberExtractor(
+                vertical_strategy='text',
+                horizontal_strategy='text'
+            ),
+            VisionExtractor(),
         ]
 
     @property
     def extractor_names(self) -> List[str]:
         """Return list of extractor names being used."""
         return [ext.name for ext in self._extractors]
+
+    def extract_all_with_scores(
+        self,
+        pdf_path: str,
+        page_num: int,
+        table_areas: Optional[list] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Run all extractors and return all results with scores and warnings.
+
+        Unlike extract_best which returns only the best result, this method
+        returns ALL extraction results from ALL extractors, each scored and
+        annotated with quality warnings. This allows users to compare and
+        select their preferred extraction method.
+
+        Args:
+            pdf_path: Path to the PDF file.
+            page_num: Page number to extract from (1-indexed).
+            table_areas: Optional list of bounding boxes.
+
+        Returns:
+            List of result dictionaries sorted by score descending. Each dict:
+            {
+                'method': str,          # Extractor name
+                'score': float,         # Quality score 0-1
+                'confidence': float,    # Extractor's confidence
+                'rows': int,            # Number of rows
+                'cols': int,            # Number of columns
+                'warnings': List[str],  # Quality warnings
+                'dataframe': DataFrame, # Extracted data
+                'metadata': dict,       # Extraction metadata
+                'error': str,           # (only if extraction failed)
+            }
+        """
+        results = []
+
+        for extractor in self._extractors:
+            try:
+                extractions = extractor.extract(pdf_path, page_num, table_areas)
+
+                if not extractions:
+                    # Extractor found no tables
+                    logger.info(f"[MultiExtractor] {extractor.name}: no tables found")
+                    results.append({
+                        'method': extractor.name,
+                        'score': 0,
+                        'confidence': 0,
+                        'rows': 0,
+                        'cols': 0,
+                        'warnings': ['No tables found'],
+                        'dataframe': None,
+                        'metadata': {},
+                    })
+                    continue
+
+                for ext in extractions:
+                    score = self._scorer.score(ext)
+                    warnings = self._scorer.generate_warnings(ext)
+
+                    results.append({
+                        'method': ext.method,
+                        'score': score,
+                        'confidence': ext.confidence,
+                        'rows': len(ext.dataframe),
+                        'cols': len(ext.dataframe.columns),
+                        'warnings': warnings,
+                        'dataframe': ext.dataframe,
+                        'metadata': ext.metadata,
+                    })
+
+                logger.info(
+                    f"[MultiExtractor] {extractor.name}: scored {len(extractions)} table(s)"
+                )
+
+            except Exception as e:
+                logger.warning(
+                    f"[MultiExtractor] {extractor.name} failed: {e}"
+                )
+                results.append({
+                    'method': extractor.name,
+                    'score': 0,
+                    'confidence': 0,
+                    'rows': 0,
+                    'cols': 0,
+                    'warnings': [],
+                    'dataframe': None,
+                    'metadata': {},
+                    'error': str(e),
+                })
+
+        # Sort by score descending
+        results.sort(key=lambda r: r.get('score', 0), reverse=True)
+
+        return results
 
     def extract_all(
         self,

@@ -94,7 +94,7 @@ class Report(models.Model):
     )
 
     name = models.CharField(max_length=100, null=True)
-    document = models.FileField(storage=MyStorage(), upload_to=upload_path)
+    document = models.FileField(storage=MyStorage(), upload_to=upload_path, max_length=255)
     zip_csv = models.FileField(null=True)
     f_type = models.CharField(max_length=5, null=True)
     total_pages = models.PositiveIntegerField(null=True, blank=True)
@@ -208,6 +208,14 @@ class Extracted(models.Model):
         null=True,
         blank=True,
         help_text="Table location as {x0, y0, x1, y1} coordinates",
+    )
+    selection = models.ForeignKey(
+        'TableSelection',
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='extractions',
+        help_text="TableSelection this extraction was created from",
     )
 
     def __str__(self):

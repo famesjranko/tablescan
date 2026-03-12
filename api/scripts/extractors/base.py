@@ -51,12 +51,13 @@ class BaseExtractor(ABC):
         Args:
             pdf_path: Path to the PDF file.
             page_num: Page number to extract from (1-indexed for Camelot compatibility).
-            table_areas: Optional list of bounding boxes [(x1, y1, x2, y2), ...].
-                         If None, extractor should auto-detect table regions.
+            table_areas: List of bounding boxes [(x1, y1, x2, y2), ...] in PDF coordinates.
+                         REQUIRED: Extractors expect regions from YOLO detection or manual selection.
+                         If None/empty, extractors will log a warning and return empty list.
 
         Returns:
             List of ExtractionResult, one per detected table.
-            Empty list if no tables found.
+            Empty list if no tables found or table_areas not provided.
 
         Raises:
             FileNotFoundError: If PDF file doesn't exist.

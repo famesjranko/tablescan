@@ -69,6 +69,11 @@ class PdfplumberExtractor(BaseExtractor):
     @property
     def name(self) -> str:
         """Return the unique name of this extractor."""
+        # Distinguish between different pdfplumber strategies
+        if self._vertical_strategy == 'explicit':
+            return "pdfplumber_explicit"
+        elif self._vertical_strategy == 'text':
+            return "pdfplumber_text"
         return "pdfplumber"
 
     def extract(
@@ -112,40 +117,31 @@ class PdfplumberExtractor(BaseExtractor):
 
                 page = pdf.pages[page_num - 1]  # Convert to 0-indexed
 
+                # table_areas is required - we always extract from specific regions
+                if not table_areas:
+                    logger.warning(f"[{self.name}] No table_areas provided - pipeline error, skipping")
+                    return []
+
                 # Build table settings
                 table_settings = self._build_table_settings()
 
-                # Extract tables
-                if table_areas:
-                    # Extract from specific areas
-                    for i, (x1, y1, x2, y2) in enumerate(table_areas):
-                        # Convert from PDF coordinates (origin bottom-left, y increases up)
-                        # to pdfplumber coordinates (origin top-left, y increases down)
-                        # PDF y1 = top (higher value) → plumber top (lower value)
-                        # PDF y2 = bottom (lower value) → plumber bottom (higher value)
-                        page_height = page.height
-                        plumber_top = page_height - y1
-                        plumber_bottom = page_height - y2
-                        plumber_bbox = (x1, plumber_top, x2, plumber_bottom)
-                        cropped = page.within_bbox(plumber_bbox)
-                        tables = cropped.extract_tables(table_settings)
+                # Extract from specific areas
+                for i, (x1, y1, x2, y2) in enumerate(table_areas):
+                    # Convert from PDF coordinates (origin bottom-left, y increases up)
+                    # to pdfplumber coordinates (origin top-left, y increases down)
+                    # PDF y1 = top (higher value) → plumber top (lower value)
+                    # PDF y2 = bottom (lower value) → plumber bottom (higher value)
+                    page_height = page.height
+                    plumber_top = page_height - y1
+                    plumber_bottom = page_height - y2
+                    plumber_bbox = (x1, plumber_top, x2, plumber_bottom)
+                    cropped = page.within_bbox(plumber_bbox)
+                    tables = cropped.extract_tables(table_settings)
 
-                        for j, table_data in enumerate(tables):
-                            result = self._process_table(
-                                table_data, page, i * 100 + j, page_num,
-                                bbox=(x1, y1, x2, y2)
-                            )
-                            if result:
-                                results.append(result)
-                else:
-                    # Auto-detect tables
-                    tables = page.find_tables(table_settings)
-
-                    for i, table in enumerate(tables):
-                        table_data = table.extract()
-                        bbox = table.bbox if hasattr(table, 'bbox') else None
+                    for j, table_data in enumerate(tables):
                         result = self._process_table(
-                            table_data, page, i, page_num, bbox=bbox
+                            table_data, page, i * 100 + j, page_num,
+                            bbox=(x1, y1, x2, y2)
                         )
                         if result:
                             results.append(result)
@@ -155,8 +151,7 @@ class PdfplumberExtractor(BaseExtractor):
             raise
         except Exception as e:
             # Return empty list for other extraction failures
-            # Log at DEBUG level for troubleshooting (MultiExtractor logs at INFO/WARNING)
-            logger.debug(f"[PdfplumberExtractor] Extraction failed for {pdf_path} page {page_num}: {e}")
+            logger.warning(f"[{self.name}] Extraction failed for page {page_num}: {e}")
             return []
 
         return results
