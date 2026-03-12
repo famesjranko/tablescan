@@ -1,6 +1,6 @@
 <!-- Table Card Component with Method Selector -->
 {% load static %}
-<div class="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden"
+<div class="bg-white rounded-lg shadow-sm border border-gray-200"
      x-data='tableCard{{ table.id }}()'>
 <script>
 function tableCard{{ table.id }}() {
@@ -14,12 +14,16 @@ function tableCard{{ table.id }}() {
         variantsAvailable: {{ table.variants_available|yesno:'true,false' }},
         selectedMethod: '{{ table.extraction_method|default:""|escapejs }}',
         showMethodDropdown: false,
+        // Dynamic state for method switching
+        extractedId: {{ table.id }},
+        csvUrl: '{{ table.csv_file.url|default:"" }}',
+        jsonUrl: '{{ table.json_file.url|default:"" }}',
 
         async switchMethod() {
             if (this.selectedMethod === this.currentMethod) return;
             this.switching = true;
             try {
-                const response = await fetch('/api/extracted/{{ table.id }}/switch-method/', {
+                const response = await fetch(`/api/extracted/${this.extractedId}/switch-method/`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -28,7 +32,26 @@ function tableCard{{ table.id }}() {
                     body: JSON.stringify({ method: this.selectedMethod })
                 });
                 if (response.ok) {
-                    location.reload();
+                    const data = await response.json();
+                    // Update state with new extraction
+                    this.extractedId = data.extracted_id;
+                    this.csvUrl = data.csv_url || '';
+                    this.jsonUrl = data.json_url || '';
+                    this.currentMethod = this.selectedMethod;
+                    this.previewData = null;  // Invalidate cache
+
+                    // Re-fetch preview if open
+                    if (this.showPreview && data.preview_url) {
+                        this.loading = true;
+                        try {
+                            const previewResp = await fetch(data.preview_url);
+                            this.previewData = await previewResp.json();
+                        } catch (e) {
+                            console.error('Failed to load preview:', e);
+                        } finally {
+                            this.loading = false;
+                        }
+                    }
                 } else {
                     const data = await response.json();
                     alert(data.error || 'Failed to switch method');
@@ -163,25 +186,21 @@ function tableCard{{ table.id }}() {
                     </span>
                 </template>
 
-                {% if table.csv_file %}
-                <a href="{{ table.csv_file.url }}" download class="inline-flex items-center px-2.5 py-1.5 border border-gray-300 text-xs font-medium rounded text-gray-700 bg-white hover:bg-gray-50">
+                <a x-show="csvUrl" :href="csvUrl" download class="inline-flex items-center px-2.5 py-1.5 border border-gray-300 text-xs font-medium rounded text-gray-700 bg-white hover:bg-gray-50">
                     <svg class="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
                     </svg>
                     CSV
                 </a>
-                {% endif %}
-                {% if table.json_file %}
-                <a href="{{ table.json_file.url }}" download class="inline-flex items-center px-2.5 py-1.5 border border-gray-300 text-xs font-medium rounded text-gray-700 bg-white hover:bg-gray-50">
+                <a x-show="jsonUrl" :href="jsonUrl" download class="inline-flex items-center px-2.5 py-1.5 border border-gray-300 text-xs font-medium rounded text-gray-700 bg-white hover:bg-gray-50">
                     <svg class="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
                     </svg>
                     JSON
                 </a>
-                {% endif %}
-                {% if table.csv_file %}
                 <button
-                    @click="if (!previewData) { loading = true; fetch('{% url 'table_preview' table.id %}').then(r => r.json()).then(d => { previewData = d; loading = false; }); } showPreview = !showPreview"
+                    x-show="csvUrl"
+                    @click="if (!previewData) { loading = true; fetch(`/table-preview/${extractedId}/`).then(r => r.json()).then(d => { previewData = d; loading = false; }); } showPreview = !showPreview"
                     class="inline-flex items-center px-2.5 py-1.5 border border-primary text-xs font-medium rounded text-primary bg-white hover:bg-blue-50"
                 >
                     <svg class="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -190,7 +209,6 @@ function tableCard{{ table.id }}() {
                     </svg>
                     <span x-text="showPreview ? 'Hide' : 'Preview'">Preview</span>
                 </button>
-                {% endif %}
             </div>
         </div>
     </div>

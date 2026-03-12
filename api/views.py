@@ -355,13 +355,36 @@ class ExtractedViewSet(viewsets.ModelViewSet):
             selection=extracted.selection
         )
 
-        return Response({
+        # Query for newly created Extracted record
+        new_extracted = Extracted.objects.filter(
+            report=report,
+            selection_id=extracted.selection_id,
+            f_type='csv'
+        ).first()
+
+        # Build response with new extraction data
+        response_data = {
             'status': 'ok',
             'method': new_method,
             'score': chosen.get('score', 0),
             'rows': chosen.get('rows', 0),
             'cols': chosen.get('cols', 0),
-        })
+        }
+
+        if new_extracted:
+            response_data['extracted_id'] = new_extracted.id
+            response_data['csv_url'] = new_extracted.file.url if new_extracted.file else None
+            response_data['preview_url'] = f'/table-preview/{new_extracted.id}/'
+
+            # Find matching JSON file
+            json_extracted = Extracted.objects.filter(
+                report=report,
+                selection_id=extracted.selection_id,
+                f_type='json'
+            ).first()
+            response_data['json_url'] = json_extracted.file.url if json_extracted and json_extracted.file else None
+
+        return Response(response_data)
 
 
 class TableSelectionViewSet(viewsets.ModelViewSet):
