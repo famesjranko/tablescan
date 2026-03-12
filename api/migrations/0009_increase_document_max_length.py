@@ -14,6 +14,6 @@ class Migration(migrations.Migration):
         migrations.AlterField(
             model_name='report',
             name='document',
-            field=models.FileField(max_length=255, storage=api.models.MyStorage(), upload_to=api.models.upload_path),
+            field=models.FileField(max_length=255, upload_to=api.models.upload_path),
         ),
     ]

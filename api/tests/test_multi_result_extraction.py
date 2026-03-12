@@ -492,3 +492,233 @@ class TestSwitchMethodEndpoint(TestCase):
         # Then: should return error
         assert response.status_code == 400
         assert 'method' in response.json().get('error', '').lower()
+
+    def test_switch_method_success_replaces_extraction(self):
+        # Given: a report with document, selection, extracted table, and cached variants
+        import shutil
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        from django.core.cache import cache
+
+        # Create PDF bytes
+        doc = fitz.open()
+        page = doc.new_page(width=612, height=792)
+        shape = page.new_shape()
+        x, y = 100, 200
+        cw, ch = 120, 30
+        for i in range(5):
+            shape.draw_line(fitz.Point(x, y + i * ch), fitz.Point(x + 3 * cw, y + i * ch))
+        for j in range(4):
+            shape.draw_line(fitz.Point(x + j * cw, y), fitz.Point(x + j * cw, y + 4 * ch))
+        shape.finish(color=(0, 0, 0), width=0.5)
+        shape.commit()
+        data = [["Name", "Value", "Status"], ["A", "100", "OK"], ["B", "200", "OK"], ["C", "300", "OK"]]
+        for i, row in enumerate(data):
+            for j, cell in enumerate(row):
+                page.insert_text(fitz.Point(x + j * cw + 10, y + i * ch + 20), cell, fontsize=10)
+        pdf_bytes = doc.tobytes()
+        doc.close()
+
+        pdf_file = SimpleUploadedFile('test_switch.pdf', pdf_bytes, content_type='application/pdf')
+        report = Report.objects.create(
+            owner=self.user, name='test_switch', f_type='pdf', document=pdf_file
+        )
+
+        selection = TableSelection.objects.create(
+            report=report, page_num=1,
+            x1=10, y1=20, x2=90, y2=80,
+            status='approved', source='manual'
+        )
+
+        # Create output directories and initial extracted record
+        working_dir = report.document.path.rsplit('/', 1)[0]
+        csv_dir = os.path.join(working_dir, 'csv')
+        json_dir = os.path.join(working_dir, 'json')
+        xlsx_dir = os.path.join(working_dir, 'xlsx')
+        os.makedirs(csv_dir, exist_ok=True)
+        os.makedirs(json_dir, exist_ok=True)
+        os.makedirs(xlsx_dir, exist_ok=True)
+        csv_path = os.path.join(csv_dir, 'test-1-table-0.csv')
+        with open(csv_path, 'w') as f:
+            f.write("Name,Value,Status\nA,100,OK\n")
+
+        extracted = Extracted.objects.create(
+            report=report, page_num=1, table_num=0, f_type='csv',
+            extraction_method='pdfplumber', selection=selection,
+            file=f'test_switch/csv/test-1-table-0.csv'
+        )
+
+        # Populate cache with variants including an alternate method
+        alt_df = pd.DataFrame({'Name': ['X', 'Y'], 'Value': ['999', '888'], 'Status': ['NEW', 'NEW']})
+        variants = [
+            {'method': 'pdfplumber', 'dataframe': pd.DataFrame({'Name': ['A'], 'Value': ['100'], 'Status': ['OK']}),
+             'score': 0.8, 'confidence': 0.9, 'rows': 1, 'cols': 3, 'metadata': {}},
+            {'method': 'camelot_stream', 'dataframe': alt_df,
+             'score': 0.85, 'confidence': 0.95, 'rows': 2, 'cols': 3, 'metadata': {}},
+        ]
+        cache_key = _cache_key_for_selection(report.id, selection.id)
+        cache.set(cache_key, _serialize_variants_for_cache(variants), timeout=3600)
+
+        old_extracted_id = extracted.id
+
+        # When: switching to camelot_stream method
+        response = self.client.post(
+            f'/api/extracted/{extracted.id}/switch-method/',
+            {'method': 'camelot_stream'},
+            format='json'
+        )
+
+        # Then: should succeed with new extraction data
+        assert response.status_code == 200
+        data = response.json()
+        assert data['status'] == 'ok'
+        assert data['method'] == 'camelot_stream'
+        assert data['rows'] == 2
+        assert data['cols'] == 3
+
+        # And: old extracted record should be deleted
+        assert not Extracted.objects.filter(id=old_extracted_id).exists()
+
+        # And: new extracted records should exist
+        new_extractions = Extracted.objects.filter(report=report, selection_id=selection.id)
+        assert new_extractions.count() >= 1
+
+        # Cleanup
+        shutil.rmtree(working_dir, ignore_errors=True)
+
+
+# =============================================================================
+# Test extract_from_selections Integration
+# =============================================================================
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(
+    CELERY_TASK_ALWAYS_EAGER=True,
+    CELERY_TASK_EAGER_PROPAGATES=True,
+    CACHES={
+        'default': {
+            'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+        }
+    }
+)
+class TestExtractFromSelectionsIntegration(TestCase):
+    """Integration tests for extract_from_selections task."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username='testuser', password='testpass123')
+
+    def test_extract_from_selections_creates_extractions(self):
+        # Given: a report with a PDF document and approved selection
+        import shutil
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        from api.tasks import extract_from_selections
+
+        # Create PDF with bordered table
+        doc = fitz.open()
+        page = doc.new_page(width=612, height=792)
+        shape = page.new_shape()
+        x, y = 100, 200
+        cw, ch = 120, 30
+        rows, cols = 4, 3
+        for i in range(rows + 1):
+            shape.draw_line(fitz.Point(x, y + i * ch), fitz.Point(x + cols * cw, y + i * ch))
+        for j in range(cols + 1):
+            shape.draw_line(fitz.Point(x + j * cw, y), fitz.Point(x + j * cw, y + rows * ch))
+        shape.finish(color=(0, 0, 0), width=0.5)
+        shape.commit()
+        data = [["Name", "Value", "Status"], ["Item A", "100", "Active"],
+                ["Item B", "200", "Pending"], ["Item C", "300", "Complete"]]
+        for i, row in enumerate(data):
+            for j, cell in enumerate(row):
+                page.insert_text(fitz.Point(x + j * cw + 10, y + i * ch + 20), cell, fontsize=10)
+        pdf_bytes = doc.tobytes()
+        doc.close()
+
+        pdf_file = SimpleUploadedFile('integration_test.pdf', pdf_bytes, content_type='application/pdf')
+        report = Report.objects.create(
+            owner=self.user, name='integration_test', f_type='pdf', document=pdf_file
+        )
+
+        # Create approved selection covering the table area (canvas coordinates 0-100)
+        # Table is at x=100-460, y=200-320 on 612x792 page
+        # Canvas coords: x1=16%, y1=25%, x2=75%, y2=40%
+        TableSelection.objects.create(
+            report=report, page_num=1,
+            x1=16, y1=25, x2=75, y2=41,
+            status='approved', source='manual'
+        )
+
+        # When: running the extract_from_selections task
+        result = extract_from_selections.apply(args=[report.id]).get()
+
+        # Then: extraction should complete successfully
+        assert result['status'] in ('completed', 'partial'), f"Unexpected status: {result}"
+        assert result['report_id'] == report.id
+
+        # And: extracted records should exist
+        extractions = Extracted.objects.filter(report=report)
+        assert extractions.count() >= 1, "Expected at least one extraction"
+
+        # And: CSV file should exist
+        csv_extractions = extractions.filter(f_type='csv')
+        assert csv_extractions.count() >= 1, "Expected CSV extraction"
+
+        # Cleanup
+        working_dir = report.document.path.rsplit('/', 1)[0]
+        shutil.rmtree(working_dir, ignore_errors=True)
+
+    def test_extract_from_selections_caches_variants(self):
+        # Given: a report with approved selection
+        import shutil
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        from django.core.cache import cache
+        from api.tasks import extract_from_selections
+
+        # Create simple PDF with table
+        doc = fitz.open()
+        page = doc.new_page(width=612, height=792)
+        shape = page.new_shape()
+        x, y = 100, 200
+        cw, ch = 120, 30
+        for i in range(4):
+            shape.draw_line(fitz.Point(x, y + i * ch), fitz.Point(x + 3 * cw, y + i * ch))
+        for j in range(4):
+            shape.draw_line(fitz.Point(x + j * cw, y), fitz.Point(x + j * cw, y + 3 * ch))
+        shape.finish(color=(0, 0, 0), width=0.5)
+        shape.commit()
+        data = [["Col1", "Col2", "Col3"], ["A", "B", "C"], ["D", "E", "F"]]
+        for i, row in enumerate(data):
+            for j, cell in enumerate(row):
+                page.insert_text(fitz.Point(x + j * cw + 10, y + i * ch + 20), cell, fontsize=10)
+        pdf_bytes = doc.tobytes()
+        doc.close()
+
+        pdf_file = SimpleUploadedFile('cache_test.pdf', pdf_bytes, content_type='application/pdf')
+        report = Report.objects.create(
+            owner=self.user, name='cache_test', f_type='pdf', document=pdf_file
+        )
+
+        selection = TableSelection.objects.create(
+            report=report, page_num=1,
+            x1=16, y1=25, x2=75, y2=40,
+            status='approved', source='manual'
+        )
+
+        # When: running extraction
+        extract_from_selections.apply(args=[report.id]).get()
+
+        # Then: variants should be cached
+        cache_key = _cache_key_for_selection(report.id, selection.id)
+        cached_data = cache.get(cache_key)
+        assert cached_data is not None, "Expected variants to be cached"
+
+        variants = _deserialize_variants_from_cache(cached_data)
+        assert len(variants) >= 1, "Expected at least one variant in cache"
+
+        # And: each variant should have expected structure
+        for v in variants:
+            assert 'method' in v
+            assert 'score' in v
+
+        # Cleanup
+        working_dir = report.document.path.rsplit('/', 1)[0]
+        shutil.rmtree(working_dir, ignore_errors=True)
