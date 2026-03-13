@@ -815,11 +815,17 @@ class UploadAsyncView(LoginRequiredMixin, View):
         end_page = int(request.POST.get('end_page', -1))
 
         # Get extraction options
-        flavor = request.POST.get('camelot_flavor', 'auto')
-        row_tol = int(request.POST.get('row_tol', 2))
         strip_text = request.POST.get('strip_text', '\n')
         merge_headers = request.POST.get('merge_headers', 'on') == 'on'
         extraction_mode = request.POST.get('extraction_mode', 'auto')
+
+        # Get library toggles (all enabled by default)
+        enabled_libraries = {
+            'camelot': request.POST.get('use_camelot', 'on') == 'on',
+            'pdfplumber': request.POST.get('use_pdfplumber', 'on') == 'on',
+            'pymupdf': request.POST.get('use_pymupdf', 'on') == 'on',
+            'vision': request.POST.get('use_vision', 'on') == 'on',
+        }
 
         # Create report using serializer
         report_serializer = ReportSerializer(
@@ -891,8 +897,7 @@ class UploadAsyncView(LoginRequiredMixin, View):
                 file_path,
                 start_page,
                 end_page,
-                flavor=flavor,
-                row_tol=row_tol,
+                enabled_libraries=enabled_libraries,
                 strip_text=strip_text,
                 merge_headers=merge_headers
             )

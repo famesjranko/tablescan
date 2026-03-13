@@ -34,30 +34,56 @@ class MultiExtractor:
         extractors: List of extractor instances to run.
     """
 
-    def __init__(self):
-        """Initialize MultiExtractor with default extractors and scorer."""
-        self._scorer = ExtractionScorer()
+    def __init__(self, enabled_libraries: dict = None):
+        """
+        Initialize MultiExtractor with extractors based on enabled libraries.
 
-        # Initialize all extractors
+        Args:
+            enabled_libraries: Dict of library toggles. Keys:
+                - 'camelot': Enable Camelot lattice + stream extractors
+                - 'pdfplumber': Enable pdfplumber lines + text extractors
+                - 'pymupdf': Enable PyMuPDF lines + text extractors
+                - 'vision': Enable img2table vision extractor
+                All default to True if not specified.
+        """
+        if enabled_libraries is None:
+            enabled_libraries = {'camelot': True, 'pdfplumber': True, 'pymupdf': True, 'vision': True}
+
+        self._scorer = ExtractionScorer()
+        self._extractors = []
+
         # - camelot_lattice: For tables with visible borders/gridlines
         # - camelot_stream: For borderless tables (whitespace analysis)
+        if enabled_libraries.get('camelot', True):
+            self._extractors.extend([
+                CamelotExtractor(flavor='lattice'),
+                CamelotExtractor(flavor='stream'),
+            ])
+
         # - pdfplumber: Default 'lines' strategy (requires visible lines)
         # - pdfplumber_text: 'text' strategy for borderless tables (text alignment)
+        if enabled_libraries.get('pdfplumber', True):
+            self._extractors.extend([
+                PdfplumberExtractor(),
+                PdfplumberExtractor(
+                    vertical_strategy='text',
+                    horizontal_strategy='text'
+                ),
+            ])
+
         # - pymupdf: PyMuPDF 'lines' strategy (different algorithm than pdfplumber)
         # - pymupdf_text: PyMuPDF 'text' strategy for borderless tables
+        if enabled_libraries.get('pymupdf', True):
+            self._extractors.extend([
+                PyMuPDFExtractor(strategy='lines'),
+                PyMuPDFExtractor(strategy='text'),
+            ])
+
         # - img2table: Vision-based extraction
-        self._extractors = [
-            CamelotExtractor(flavor='lattice'),
-            CamelotExtractor(flavor='stream'),
-            PdfplumberExtractor(),
-            PdfplumberExtractor(
-                vertical_strategy='text',
-                horizontal_strategy='text'
-            ),
-            PyMuPDFExtractor(strategy='lines'),
-            PyMuPDFExtractor(strategy='text'),
-            VisionExtractor(),
-        ]
+        if enabled_libraries.get('vision', True):
+            self._extractors.append(VisionExtractor())
+
+        logger.info(f"[MultiExtractor] enabled_libraries={enabled_libraries}, extractors={self.extractor_names}")
 
     @property
     def extractor_names(self) -> List[str]:

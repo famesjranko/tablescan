@@ -38,7 +38,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 COPY . .
 
 # Create directories
-RUN mkdir -p documents static
+RUN mkdir -p documents static outputs
 
 # Collect static files
 RUN python manage.py collectstatic --noinput || true

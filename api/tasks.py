@@ -56,7 +56,7 @@ def _deserialize_variants_from_cache(data: str) -> list:
 
 @shared_task(bind=True)
 def extract_tables_task(self, report_id, file_path, start_page, end_page,
-                        flavor='auto', row_tol=2, strip_text='\n', merge_headers=True):
+                        enabled_libraries=None, strip_text='\n', merge_headers=True):
     """
     Async task to extract tables from a PDF document.
     Updates task state with progress for SSE streaming.
@@ -66,11 +66,12 @@ def extract_tables_task(self, report_id, file_path, start_page, end_page,
         file_path: Path to PDF file
         start_page: Starting page number
         end_page: Ending page number (-1 for all)
-        flavor: Camelot flavor ('auto', 'lattice', or 'stream')
-        row_tol: Row tolerance for stream flavor
+        enabled_libraries: Dict of library toggles (camelot, pdfplumber, pymupdf, vision)
         strip_text: Characters to strip from cell text
         merge_headers: Whether to merge fragmented multi-row headers
     """
+    if enabled_libraries is None:
+        enabled_libraries = {'camelot': True, 'pdfplumber': True, 'pymupdf': True, 'vision': True}
     log = Logging()
 
     # Update state to show we've started
@@ -95,7 +96,7 @@ def extract_tables_task(self, report_id, file_path, start_page, end_page,
             }
 
         log.output("INFO", f"[Task {self.request.id}] Starting extraction for report {report_id}")
-        log.output("INFO", f"[Task {self.request.id}] Options: flavor={flavor}, merge_headers={merge_headers}")
+        log.output("INFO", f"[Task {self.request.id}] Options: enabled_libraries={enabled_libraries}, merge_headers={merge_headers}")
 
         # Update progress
         self.update_state(state='PROGRESS', meta={
@@ -115,8 +116,10 @@ def extract_tables_task(self, report_id, file_path, start_page, end_page,
         # Run extraction with options
         extracted = table_extract.extract(
             file_path, start_page, end_page,
-            flavor=flavor, row_tol=row_tol, strip_text=strip_text,
-            merge_headers=merge_headers, report_id=report_id,
+            enabled_libraries=enabled_libraries,
+            strip_text=strip_text,
+            merge_headers=merge_headers,
+            report_id=report_id,
             progress_callback=update_progress
         )
 

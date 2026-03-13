@@ -213,7 +213,7 @@ def _serialize_variants_for_cache(variants: list) -> str:
 
 def detect_tables(file_path, page_number, output_type, report_db, extract_dir,
                   flavor='auto', row_tol=2, strip_text='\n', merge_headers=True,
-                  page_type: Optional[str] = None) -> list:
+                  page_type: Optional[str] = None, enabled_libraries: dict = None) -> list:
     """
     Main function for detection, extraction, and saving extracted tables to database
 
@@ -227,6 +227,7 @@ def detect_tables(file_path, page_number, output_type, report_db, extract_dir,
         row_tol: Row tolerance for Camelot parsing
         strip_text: Characters to strip from cell text
         merge_headers: Whether to merge fragmented multi-row headers
+        enabled_libraries: Dict of library toggles (camelot, pdfplumber, pymupdf, vision)
     """
     # create log object
     log = Logging()
@@ -306,8 +307,8 @@ def detect_tables(file_path, page_number, output_type, report_db, extract_dir,
 
     log.output('INFO', f'Page {pg}: Running MultiExtractor on {len(table_areas)} YOLO-detected area(s)')
 
-    # Run MultiExtractor with YOLO-detected table areas
-    multi_extractor = MultiExtractor()
+    # Run MultiExtractor with enabled libraries
+    multi_extractor = MultiExtractor(enabled_libraries=enabled_libraries)
     cache_ttl = getattr(settings, 'EXTRACTION_VARIANTS_CACHE_TTL', 600)
 
     report = []
@@ -447,7 +448,8 @@ def detect_tables(file_path, page_number, output_type, report_db, extract_dir,
 def extract_tables_with_all_variants(
     file_path: str,
     page_number: int,
-    merge_headers: bool = True
+    merge_headers: bool = True,
+    enabled_libraries: dict = None
 ) -> dict:
     """
     Extract tables and return ALL variants from all extractors.
@@ -459,6 +461,7 @@ def extract_tables_with_all_variants(
         file_path: Path to PDF file
         page_number: Page number to process (1-indexed)
         merge_headers: Whether to merge fragmented multi-row headers
+        enabled_libraries: Dict of library toggles (camelot, pdfplumber, pymupdf, vision)
 
     Returns:
         dict with:
@@ -471,7 +474,7 @@ def extract_tables_with_all_variants(
 
     log.output('INFO', f'[extract-with-variants] Starting extraction for page {pg}')
 
-    multi_extractor = MultiExtractor()
+    multi_extractor = MultiExtractor(enabled_libraries=enabled_libraries)
 
     try:
         # Get ALL variants from all extractors
@@ -545,7 +548,8 @@ def extract_tables_with_all_variants(
 
 
 def extract_tables_direct_readonly(file_path: str, page_number: int,
-                                   merge_headers: bool = True) -> List[ExtractionResult]:
+                                   merge_headers: bool = True,
+                                   enabled_libraries: dict = None) -> List[ExtractionResult]:
     """
     Extract tables directly using multiple extractors without saving.
 
@@ -561,6 +565,7 @@ def extract_tables_direct_readonly(file_path: str, page_number: int,
         file_path: Path to PDF file
         page_number: Page number to process
         merge_headers: Whether to merge fragmented multi-row headers
+        enabled_libraries: Dict of library toggles (camelot, pdfplumber, pymupdf, vision)
 
     Returns:
         List[ExtractionResult]: Processed extraction results with all metadata populated
@@ -571,7 +576,7 @@ def extract_tables_direct_readonly(file_path: str, page_number: int,
     log.output('INFO', f'[multi-extractor-readonly] Starting extraction for page {pg}')
 
     # Use MultiExtractor to run all backends and select best
-    multi_extractor = MultiExtractor()
+    multi_extractor = MultiExtractor(enabled_libraries=enabled_libraries)
 
     try:
         best_results, comparison = multi_extractor.extract_with_comparison(

@@ -149,20 +149,34 @@
                 </button>
 
                 <div x-show="showAdvanced" x-cloak class="mt-4 space-y-4">
-                    <!-- Table Type Selection -->
-                    <div>
-                        <label for="camelot_flavor" class="block text-sm font-medium text-gray-700">Table Type</label>
-                        <select
-                            name="camelot_flavor"
-                            id="camelot_flavor"
-                            x-model="camelotFlavor"
-                            class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary focus:ring-primary sm:text-sm border px-3 py-2"
-                        >
-                            <option value="auto">Auto-detect (recommended)</option>
-                            <option value="lattice">Bordered tables (with gridlines)</option>
-                            <option value="stream">Borderless tables (no gridlines)</option>
-                        </select>
-                        <p class="mt-1 text-xs text-gray-500">Auto-detect analyzes each page to choose the best method</p>
+                    <!-- Extraction Libraries -->
+                    <div class="mb-4">
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Extraction Libraries</label>
+                        <p class="text-xs text-gray-500 mb-2">Select which extraction methods to run. More libraries = better results but slower.</p>
+
+                        <label class="flex items-center mb-2">
+                            <input type="checkbox" x-model="useCamelot" class="h-4 w-4 text-primary focus:ring-primary border-gray-300 rounded">
+                            <span class="ml-2 text-sm">Camelot</span>
+                            <span class="ml-1 text-xs text-gray-400">- bordered & borderless tables</span>
+                        </label>
+
+                        <label class="flex items-center mb-2">
+                            <input type="checkbox" x-model="usePdfplumber" class="h-4 w-4 text-primary focus:ring-primary border-gray-300 rounded">
+                            <span class="ml-2 text-sm">pdfplumber</span>
+                            <span class="ml-1 text-xs text-gray-400">- alternative text extraction</span>
+                        </label>
+
+                        <label class="flex items-center mb-2">
+                            <input type="checkbox" x-model="usePymupdf" class="h-4 w-4 text-primary focus:ring-primary border-gray-300 rounded">
+                            <span class="ml-2 text-sm">PyMuPDF</span>
+                            <span class="ml-1 text-xs text-gray-400">- fast, lightweight</span>
+                        </label>
+
+                        <label class="flex items-center mb-2">
+                            <input type="checkbox" x-model="useVision" class="h-4 w-4 text-primary focus:ring-primary border-gray-300 rounded">
+                            <span class="ml-2 text-sm">Vision/OCR</span>
+                            <span class="ml-1 text-xs text-gray-400">- slower, best for scanned documents</span>
+                        </label>
                     </div>
 
                     <!-- Header Merging -->
@@ -179,21 +193,6 @@
                         </label>
                     </div>
                     <p class="text-xs text-gray-500 -mt-2 ml-6">Combines fragmented header rows into a single header</p>
-
-                    <!-- Row Tolerance (for stream flavor) -->
-                    <div x-show="camelotFlavor === 'stream'">
-                        <label for="row_tol" class="block text-sm font-medium text-gray-700">Row Tolerance</label>
-                        <input
-                            type="number"
-                            name="row_tol"
-                            id="row_tol"
-                            x-model="rowTol"
-                            min="0"
-                            max="10"
-                            class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary focus:ring-primary sm:text-sm border px-3 py-2"
-                        >
-                        <p class="mt-1 text-xs text-gray-500">Tolerance for detecting rows (higher = more lenient)</p>
-                    </div>
                 </div>
             </div>
 
@@ -288,10 +287,12 @@ function uploadForm() {
         startPage: 1,
         endPage: -1,
         showAdvanced: false,
-        camelotFlavor: 'auto',
         mergeHeaders: true,
-        rowTol: 2,
         extractionMode: 'auto',
+        useCamelot: true,
+        usePdfplumber: true,
+        usePymupdf: true,
+        useVision: true,
 
         handleFileSelect(event) {
             const file = event.target.files[0];
@@ -338,10 +339,12 @@ function uploadForm() {
             formData.append('document', this.selectedFile);
             formData.append('start_page', this.startPage);
             formData.append('end_page', this.endPage);
-            formData.append('camelot_flavor', this.camelotFlavor);
             formData.append('merge_headers', this.mergeHeaders ? 'on' : 'off');
-            formData.append('row_tol', this.rowTol);
             formData.append('extraction_mode', this.extractionMode);
+            formData.append('use_camelot', this.useCamelot ? 'on' : 'off');
+            formData.append('use_pdfplumber', this.usePdfplumber ? 'on' : 'off');
+            formData.append('use_pymupdf', this.usePymupdf ? 'on' : 'off');
+            formData.append('use_vision', this.useVision ? 'on' : 'off');
 
             try {
                 const response = await fetch('{% url "upload_async" %}', {
