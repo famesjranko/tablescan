@@ -15,8 +15,8 @@ Automated PDF table extraction with AI-powered detection. Upload PDFs, review de
 ## Quick Start
 
 ```bash
-git clone https://github.com/famesjranko/automated-PDF-tabulated-data-extractor-api.git
-cd automated-PDF-tabulated-data-extractor-api
+git clone https://github.com/famesjranko/tablescan.git
+cd tablescan
 
 # Start with Docker (recommended)
 make docker-build
