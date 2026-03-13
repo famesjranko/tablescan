@@ -304,22 +304,17 @@ def process_page_with_routing(
     output_type: str,
     report_db: "Report",
     extract_dir: Dict[str, Any],
-    flavor: str,
-    row_tol: int,
+    enabled_libraries: Dict[str, bool],
     strip_text: str,
     merge_headers: bool
 ) -> List[Dict[str, Any]]:
     """
-    Process a single page with routing based on page classification.
+    Process a single page: YOLO detection first, then extraction.
 
-    Phase 2 Architecture:
-    - Born-digital pages: Use direct extraction only (MultiExtractor/Camelot)
-    - Scanned/Mixed pages: Try BOTH vision AND direct extraction, compare results
-      using ExtractionScorer, deduplicate overlapping tables, save only the best
-
-    This enables better accuracy by allowing text-based extractors to outperform
-    vision extractors on PDFs that appear scanned but have extractable text
-    (e.g., 9.3% text coverage "scanned" pages where Camelot gives 99% accuracy).
+    Pipeline:
+    1. YOLO detects table regions (bounding boxes)
+    2. MultiExtractor extracts tables from those regions
+    3. Results are saved and cached for variant switching
 
     Args:
         file_path: Path to PDF file
@@ -327,169 +322,40 @@ def process_page_with_routing(
         output_type: Output format type
         report_db: Database report instance
         extract_dir: Dictionary of extraction directories
-        flavor: Camelot flavor ('auto', 'lattice', or 'stream')
-        row_tol: Row tolerance for Camelot parsing
+        enabled_libraries: Dict of library toggles (camelot, pdfplumber, pymupdf, vision)
         strip_text: Characters to strip from cell text
         merge_headers: Whether to merge fragmented multi-row headers
 
     Returns:
-        list: Parsing reports for extracted tables
+        dict: Contains 'parsing_report' and 'variants_data' for caching
     """
     log = Logging()
-    classifier = _get_page_classifier()
-    scorer = ExtractionScorer()
-
-    # Classify page (PageClassifier uses 0-indexed pages)
-    classification = classifier.classify(file_path, page_num - 1)
-
-    log.output(
-        'INFO',
-        f'Page {page_num}: type={classification.type}, '
-        f'text_coverage={classification.text_coverage:.1%}, '
-        f'has_images={classification.has_images}'
-    )
-
-    # Get feature flags
-    use_vision = FEATURE_FLAGS.get('use_vision_detector', True)
-    legacy_yolo = FEATURE_FLAGS.get('legacy_yolo_enabled', True)
 
     # Get lazy-loaded functions
     yolo = _get_yolo_functions()
 
-    # Collect all extraction candidates
-    candidates = []
+    log.output('INFO', f'Page {page_num}: Running YOLO detection then extraction with enabled_libraries={enabled_libraries}')
 
-    # Track variants for caching (returned to main process)
-    page_variants_data = None
-
-    if classification.type == 'born_digital':
-        # Born-digital: Use direct extraction with all variants for caching
-        log.output('INFO', f'Page {page_num}: Using multi-extractor with variants (born-digital)')
-        try:
-            extraction_data = yolo['extract_tables_with_all_variants'](
-                file_path=file_path,
-                page_number=page_num,
-                merge_headers=merge_headers
-            )
-            candidates.extend(extraction_data['best_results'])
-            # Store variants for caching by main process
-            page_variants_data = {
-                'page_num': page_num,
-                'all_variants': extraction_data['all_variants'],
-                'table_bboxes': extraction_data['table_bboxes'],
-            }
-            log.output('INFO', f'Page {page_num}: Direct extraction found {len(extraction_data["best_results"])} table(s), {len(extraction_data["all_variants"])} variants')
-        except Exception as e:
-            log.output('WARNING', f'Page {page_num}: Direct extraction failed: {e}')
-
-    elif classification.type == 'scanned' or classification.type == 'mixed':
-        # Scanned/Mixed pages: Try BOTH vision AND direct, compare results
-        # This approach allows text-based extractors to outperform vision when
-        # "scanned" PDFs actually have extractable text (e.g., 9.3% text coverage)
-        log.output('INFO', f'Page {page_num}: Trying multiple extractors ({classification.type})')
-
-        # Try vision extraction first (typically better for scanned content)
-        if use_vision:
-            try:
-                vision_results = yolo['extract_tables_vision_readonly'](
-                    file_path=file_path,
-                    page_number=page_num,
-                    strip_text=strip_text,
-                    merge_headers=merge_headers
-                )
-                candidates.extend(vision_results)
-                log.output('INFO', f'Page {page_num}: VisionExtractor found {len(vision_results)} table(s)')
-                if not vision_results:
-                    log.output('INFO', f'Page {page_num}: VisionExtractor found no tables')
-            except Exception as e:
-                log.output('WARNING', f'Page {page_num}: VisionExtractor failed: {e}')
-
-        # Also try direct extraction (Camelot works on some "scanned" PDFs with text layer)
-        try:
-            direct_results = yolo['extract_tables_direct_readonly'](
-                file_path=file_path,
-                page_number=page_num,
-                merge_headers=merge_headers
-            )
-            candidates.extend(direct_results)
-            log.output('INFO', f'Page {page_num}: Direct extraction found {len(direct_results)} table(s)')
-        except Exception as e:
-            log.output('WARNING', f'Page {page_num}: Direct extraction failed: {e}')
-
-        # If both failed and legacy YOLO is enabled, try YOLO as last resort
-        if not candidates:
-            if legacy_yolo:
-                log.output('INFO', f'Page {page_num}: Falling back to legacy YOLO pipeline')
-                try:
-                    yolo_report = yolo['detect_tables'](
-                        file_path, page_num, output_type, report_db, extract_dir,
-                        flavor, row_tol, strip_text, merge_headers,
-                        page_type=classification.type
-                    )
-                    # YOLO fallback doesn't have variants - return compatible structure
-                    return {
-                        'parsing_report': yolo_report,
-                        'variants_data': None,
-                        'page_num': page_num,
-                    }
-                except Exception as e:
-                    log.output('WARNING', f'Page {page_num}: Legacy YOLO also failed: {e}')
-            else:
-                log.output('WARNING', f'Page {page_num}: No extractor available (YOLO disabled)')
-
-    # If no candidates found, return empty result
-    if not candidates:
-        log.output('INFO', f'Page {page_num}: No tables found by any extractor')
+    # ALWAYS run YOLO first to detect table regions, then extract with enabled extractors
+    try:
+        yolo_report = yolo['detect_tables'](
+            file_path, page_num, output_type, report_db, extract_dir,
+            'auto', 2, strip_text, merge_headers,
+            page_type=None,
+            enabled_libraries=enabled_libraries
+        )
+        return {
+            'parsing_report': yolo_report,
+            'variants_data': None,
+            'page_num': page_num,
+        }
+    except Exception as e:
+        log.output('WARNING', f'Page {page_num}: YOLO detection/extraction failed: {e}')
         return {
             'parsing_report': [],
             'variants_data': None,
             'page_num': page_num,
         }
-
-    # Score all candidates
-    scored = scorer.score_all(candidates)
-
-    # Log comparison of methods (top 5 results)
-    log.output('INFO', f'Page {page_num}: Scoring {len(scored)} candidate table(s)')
-    for result, score in scored[:5]:
-        log.output(
-            'DEBUG',
-            f'Page {page_num}: {result.method}: score={score:.4f}, '
-            f'confidence={result.confidence:.3f}, '
-            f'shape={result.dataframe.shape}'
-        )
-
-    # Deduplicate overlapping tables (same region from different extractors)
-    best_results = deduplicate_by_bbox(scored, iou_threshold=0.5)
-
-    # Log which methods won
-    method_counts = {}
-    for result in best_results:
-        method = result.method
-        method_counts[method] = method_counts.get(method, 0) + 1
-
-    log.output(
-        'INFO',
-        f'Page {page_num}: After deduplication: {len(best_results)} table(s), '
-        f'methods: {method_counts}'
-    )
-
-    # Save winning results
-    report = yolo['save_extraction_results'](
-        results=best_results,
-        file_path=file_path,
-        page_num=page_num,
-        report_db=report_db,
-        extract_dir=extract_dir,
-        page_type=classification.type
-    )
-
-    # Return both parsing report and variants data for caching
-    return {
-        'parsing_report': report,
-        'variants_data': page_variants_data,
-        'page_num': page_num,
-    }
 
 
 def pdf_stats(
@@ -699,7 +565,8 @@ def process_extracted_file(
 
 
 def extract(file_path: str, start_page: int, end_page: int,
-            flavor: str = 'auto', row_tol: int = 2, strip_text: str = '\n',
+            enabled_libraries: Optional[Dict[str, bool]] = None,
+            strip_text: str = '\n',
             merge_headers: bool = True, report_id: int = None,
             progress_callback: Optional[Callable[[int, str], None]] = None) -> Dict[str, Any]:
     """
@@ -711,8 +578,7 @@ def extract(file_path: str, start_page: int, end_page: int,
         file_path (str):    [path location of pdf file]
         start_page (int):   [extraction starting page]
         end_page (int):     [extraction ending page]
-        flavor (str):       [camelot flavor: 'auto', 'lattice', or 'stream']
-        row_tol (int):      [row tolerance for stream flavor]
+        enabled_libraries (dict): [which extraction libraries to use]
         strip_text (str):   [characters to strip from cell text]
         merge_headers (bool): [whether to merge fragmented multi-row headers]
 
@@ -731,6 +597,10 @@ def extract(file_path: str, start_page: int, end_page: int,
     
     # create log object
     log = Logging()
+
+    # Default enabled_libraries if not provided
+    if enabled_libraries is None:
+        enabled_libraries = {'camelot': True, 'pdfplumber': True, 'pymupdf': True, 'vision': True}
 
     # get report database object
     file_name = Path(file_path).name
@@ -839,16 +709,16 @@ def extract(file_path: str, start_page: int, end_page: int,
     # Pages are routed based on classification (born-digital skips YOLO)
     try:
         log.output("INFO", f"starting extractions for pages {start_at} to {end_at}...")
-        log.output("INFO", f"extraction options: flavor={flavor}, row_tol={row_tol}, merge_headers={merge_headers}")
+        log.output("INFO", f"extraction options: enabled_libraries={enabled_libraries}, merge_headers={merge_headers}")
 
         # Update progress: extraction starting
         if progress_callback:
-            progress_callback(20, "Running OCR and table detection...")
+            progress_callback(20, "Detecting tables and extracting data...")
         for num in range(start_at, end_at + 1, 1):
             detection_objects = pool.apply_async(
                 process_page_with_routing,
                 (str(file_path), num, "all", report_db, extract_dir,
-                 flavor, row_tol, strip_text, merge_headers),
+                 enabled_libraries, strip_text, merge_headers),
                 callback=collect_parsing_report,
             )
     except Exception as e:
@@ -871,7 +741,7 @@ def extract(file_path: str, start_page: int, end_page: int,
 
     # Update progress: extraction complete, now post-processing
     if progress_callback:
-        progress_callback(80, "Processing extracted tables...")
+        progress_callback(80, "Scoring results and saving files...")
 
     # Post-process: Create TableSelections and cache variants for method switching
     # This runs in the main process (safe for Django ORM and cache operations)
