@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **PyMuPDF Extractor** - New extraction backend using PyMuPDF's `find_tables()` method with 'lines', 'lines_strict', and 'text' strategies
+- **Extraction Library Toggles** - Users can enable/disable extraction libraries (Camelot, pdfplumber, PyMuPDF, vision) via checkboxes in Advanced Extraction Options
+- **Multi-Extractor Pipeline** - Runs multiple extraction backends in parallel and selects best result using `ExtractionScorer`
+- **BoundingBox Coordinate System** - Unified coordinate conversion between YOLO, PDF, Camelot, pdfplumber, and PyMuPDF formats
 - **Book Viewer** - Interactive PDF viewer with page-by-page navigation and zoom controls
 - **Manual Table Selection** - Draw table regions directly on PDF pages using click-and-drag
 - **Review Workflow** - Approve or reject YOLO-detected tables before extraction

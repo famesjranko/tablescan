@@ -4,7 +4,7 @@ Extractors module for TableScan 2.0.
 Provides pluggable table extraction backends with scoring and selection.
 """
 
-from .base import BaseExtractor, ExtractionResult
+from .base import BaseExtractor, BoundingBox, ExtractionResult
 from .camelot_extractor import CamelotExtractor
 from .pdfplumber_extractor import PdfplumberExtractor
 from .pymupdf_extractor import PyMuPDFExtractor
@@ -14,6 +14,7 @@ from .multi_extractor import MultiExtractor
 
 __all__ = [
     'BaseExtractor',
+    'BoundingBox',
     'ExtractionResult',
     'CamelotExtractor',
     'PdfplumberExtractor',
