@@ -8,11 +8,12 @@ multi_extractor.py
 """
 
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .base import ExtractionResult
 from .camelot_extractor import CamelotExtractor
 from .pdfplumber_extractor import PdfplumberExtractor
+from .pymupdf_extractor import PyMuPDFExtractor
 from .vision_extractor import VisionExtractor
 from .scorer import ExtractionScorer
 
@@ -33,27 +34,56 @@ class MultiExtractor:
         extractors: List of extractor instances to run.
     """
 
-    def __init__(self):
-        """Initialize MultiExtractor with default extractors and scorer."""
-        self._scorer = ExtractionScorer()
+    def __init__(self, enabled_libraries: dict = None):
+        """
+        Initialize MultiExtractor with extractors based on enabled libraries.
 
-        # Initialize all extractors
+        Args:
+            enabled_libraries: Dict of library toggles. Keys:
+                - 'camelot': Enable Camelot lattice + stream extractors
+                - 'pdfplumber': Enable pdfplumber lines + text extractors
+                - 'pymupdf': Enable PyMuPDF lines + text extractors
+                - 'vision': Enable img2table vision extractor
+                All default to True if not specified.
+        """
+        if enabled_libraries is None:
+            enabled_libraries = {'camelot': True, 'pdfplumber': True, 'pymupdf': True, 'vision': True}
+
+        self._scorer = ExtractionScorer()
+        self._extractors = []
+
         # - camelot_lattice: For tables with visible borders/gridlines
         # - camelot_stream: For borderless tables (whitespace analysis)
+        if enabled_libraries.get('camelot', True):
+            self._extractors.extend([
+                CamelotExtractor(flavor='lattice'),
+                CamelotExtractor(flavor='stream'),
+            ])
+
         # - pdfplumber: Default 'lines' strategy (requires visible lines)
         # - pdfplumber_text: 'text' strategy for borderless tables (text alignment)
+        if enabled_libraries.get('pdfplumber', True):
+            self._extractors.extend([
+                PdfplumberExtractor(),
+                PdfplumberExtractor(
+                    vertical_strategy='text',
+                    horizontal_strategy='text'
+                ),
+            ])
+
+        # - pymupdf: PyMuPDF 'lines' strategy (different algorithm than pdfplumber)
+        # - pymupdf_text: PyMuPDF 'text' strategy for borderless tables
+        if enabled_libraries.get('pymupdf', True):
+            self._extractors.extend([
+                PyMuPDFExtractor(strategy='lines'),
+                PyMuPDFExtractor(strategy='text'),
+            ])
+
         # - img2table: Vision-based extraction
-        # Note: pdfplumber_explicit removed - requires explicit line coordinates
-        self._extractors = [
-            CamelotExtractor(flavor='lattice'),
-            CamelotExtractor(flavor='stream'),
-            PdfplumberExtractor(),
-            PdfplumberExtractor(
-                vertical_strategy='text',
-                horizontal_strategy='text'
-            ),
-            VisionExtractor(),
-        ]
+        if enabled_libraries.get('vision', True):
+            self._extractors.append(VisionExtractor())
+
+        logger.info(f"[MultiExtractor] enabled_libraries={enabled_libraries}, extractors={self.extractor_names}")
 
     @property
     def extractor_names(self) -> List[str]:
@@ -64,7 +94,8 @@ class MultiExtractor:
         self,
         pdf_path: str,
         page_num: int,
-        table_areas: Optional[list] = None
+        table_areas: Optional[list] = None,
+        progress_callback: Optional[Callable[[str, int, int], None]] = None
     ) -> List[Dict[str, Any]]:
         """
         Run all extractors and return all results with scores and warnings.
@@ -78,6 +109,8 @@ class MultiExtractor:
             pdf_path: Path to the PDF file.
             page_num: Page number to extract from (1-indexed).
             table_areas: Optional list of bounding boxes.
+            progress_callback: Optional callback(method_name, current_idx, total)
+                called before each extractor runs, for progress reporting.
 
         Returns:
             List of result dictionaries sorted by score descending. Each dict:
@@ -94,8 +127,12 @@ class MultiExtractor:
             }
         """
         results = []
+        total_extractors = len(self._extractors)
 
-        for extractor in self._extractors:
+        for i, extractor in enumerate(self._extractors):
+            if progress_callback:
+                progress_callback(extractor.name, i + 1, total_extractors)
+
             try:
                 extractions = extractor.extract(pdf_path, page_num, table_areas)
 
@@ -115,6 +152,8 @@ class MultiExtractor:
                     continue
 
                 for ext in extractions:
+                    # Score RAW extraction - don't process headers here
+                    # Header processing happens later for final display/export
                     score = self._scorer.score(ext)
                     warnings = self._scorer.generate_warnings(ext)
 

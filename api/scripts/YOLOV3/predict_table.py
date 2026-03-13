@@ -31,9 +31,12 @@ os.environ.setdefault("DJANGO_SETTINGS_MODULE", "tablescan.settings")
 django.setup()
 
 # import database
-from api.models import Extracted
+from api.models import Extracted, TableSelection
 from api.serializers import *
 from api.scripts.logging import Logging
+from django.core.cache import cache
+from django.conf import settings
+import json as json_lib
 
 import sys
 import copy
@@ -190,10 +193,27 @@ def tableValidate(dataframe) -> bool:
 
 # %%
 
+# Caching helpers for variant storage
+def _cache_key_for_selection(report_id: int, selection_id: int) -> str:
+    """Generate cache key for extraction variants."""
+    return f"extraction_variants:{report_id}:{selection_id}"
+
+
+def _serialize_variants_for_cache(variants: list) -> str:
+    """Serialize extraction variants for cache using JSON."""
+    serializable = []
+    for v in variants:
+        v_copy = v.copy()
+        if v_copy.get('dataframe') is not None:
+            v_copy['dataframe_json'] = v_copy['dataframe'].to_json(orient='split')
+        v_copy.pop('dataframe', None)
+        serializable.append(v_copy)
+    return json_lib.dumps(serializable)
+
 
 def detect_tables(file_path, page_number, output_type, report_db, extract_dir,
                   flavor='auto', row_tol=2, strip_text='\n', merge_headers=True,
-                  page_type: Optional[str] = None) -> list:
+                  page_type: Optional[str] = None, enabled_libraries: dict = None) -> list:
     """
     Main function for detection, extraction, and saving extracted tables to database
 
@@ -207,6 +227,7 @@ def detect_tables(file_path, page_number, output_type, report_db, extract_dir,
         row_tol: Row tolerance for Camelot parsing
         strip_text: Characters to strip from cell text
         merge_headers: Whether to merge fragmented multi-row headers
+        enabled_libraries: Dict of library toggles (camelot, pdfplumber, pymupdf, vision)
     """
     # create log object
     log = Logging()
@@ -264,187 +285,159 @@ def detect_tables(file_path, page_number, output_type, report_db, extract_dir,
         bbox_camelot = [",".join([str(x1), str(y1), str(x2), str(y2)])][0]
         interesting_areas.append(bbox_camelot)
 
-    # call camelot on any interesting areas found by Yolov3
-    # camelot flavor: 'lattice' for bordered tables, 'stream' for borderless
-    # camelot >= v0.10.0: backend= 'poppler' or 'ghostscript'
-
-    def run_camelot_extraction(use_flavor, areas, pdf, page, rtol, strip):
-        """Helper to run Camelot with specific flavor and return results with accuracy."""
-        kwargs = {
-            'filepath': pdf,
-            'pages': str(page),
-            'flavor': use_flavor,
-            'table_areas': areas,
-            'backend': 'poppler',
-        }
-
-        if use_flavor == 'stream':
-            kwargs['row_tol'] = rtol
-        # lattice uses defaults - Camelot auto-detects lines
-
-        if strip:
-            kwargs['strip_text'] = strip
-
-        try:
-            result = camelot.read_pdf(**kwargs)
-            # Calculate average accuracy
-            total_acc = 0
-            count = 0
-            for t in result:
-                if hasattr(t, 'parsing_report') and 'accuracy' in t.parsing_report:
-                    total_acc += t.parsing_report['accuracy']
-                    count += 1
-            avg_acc = total_acc / count if count > 0 else 0
-            return result, avg_acc
-        except Exception as e:
-            log.output('WARNING', f'Camelot {use_flavor} extraction failed: {e}')
-            return None, 0
-
-    # Auto-detect table type if flavor is 'auto'
-    actual_flavor = flavor
-    if flavor == 'auto':
-        actual_flavor = detect_table_type_from_array(img)
-        log.output('INFO', f'Auto-detected table type: {actual_flavor}')
-
-        # In auto mode, try both flavors and pick the one with better accuracy
-        result_primary, acc_primary = run_camelot_extraction(
-            actual_flavor, interesting_areas, pdf_file, pg, row_tol, strip_text
-        )
-        log.output('INFO', f'{actual_flavor} extraction accuracy: {acc_primary:.1f}%')
-
-        # Try the other flavor
-        alt_flavor = 'stream' if actual_flavor == 'lattice' else 'lattice'
-        result_alt, acc_alt = run_camelot_extraction(
-            alt_flavor, interesting_areas, pdf_file, pg, row_tol, strip_text
-        )
-        log.output('INFO', f'{alt_flavor} extraction accuracy: {acc_alt:.1f}%')
-
-        # Pick the better result (prefer lattice if accuracy is close)
-        if result_alt is not None and acc_alt > acc_primary + 5:
-            output_camelot = result_alt
-            actual_flavor = alt_flavor
-            log.output('INFO', f'Using {alt_flavor} (better accuracy: {acc_alt:.1f}% vs {acc_primary:.1f}%)')
-        elif result_primary is not None:
-            output_camelot = result_primary
-            log.output('INFO', f'Using {actual_flavor} (accuracy: {acc_primary:.1f}%)')
-        elif result_alt is not None:
-            output_camelot = result_alt
-            actual_flavor = alt_flavor
-        else:
-            output_camelot = []
-    else:
-        # User specified a flavor, use it directly
-        log.output('INFO', f'Using user-specified flavor: {actual_flavor}')
-        output_camelot, _ = run_camelot_extraction(
-            actual_flavor, interesting_areas, pdf_file, pg, row_tol, strip_text
-        )
-        if output_camelot is None:
-            output_camelot = []
-
-    report = []
-
-    # log camelot parsing report to django terminal
-    for table in output_camelot:
-        log.output("DEBUG", f"table parsing_report: {table.parsing_report}")
-        report.append(table.parsing_report)
-
-    # get camelot dataframes, added tableValidate() check
-    output_camelot = [x.df for x in output_camelot if tableValidate(x.df)]
-
-    # clean and process dataframes
-    processed_tables = []
-    for table in output_camelot:
-        # replace NaN's with empty string
-        table = table.fillna("")
-
-        # Strip empty rows and columns
-        table = strip_empty_rows_and_cols(table)
-
-        # Process headers if enabled
-        header_spans = []
-        if merge_headers:
-            table, header_spans = process_table_headers(table, merge_headers=True)
-
-        processed_tables.append((table, header_spans))
-
-    output_camelot = processed_tables
-
-    # get pdf filename
-    filename = Path(file_path).name
-
-    # export and save to database
-    # Note1:    CSV,EXCEL: optional arg 'index=[Bool]'
-    #           if you wish to exclude the y indexing, set index=False (default is True)
-    #
-    # Note2:    Can format the JSON Export structure with optional arg 'orient=[String]'
-    #           choices: split, records, index, values, table, columns (the default format)
-
-    # Build bounding box data from interesting_areas (YOLO detection coordinates)
+    # Convert YOLO-detected areas to format for MultiExtractor
+    # interesting_areas format: ["x1,y1,x2,y2", ...] (PDF coordinates)
+    # MultiExtractor expects: [(x1, y1, x2, y2), ...] as tuples
+    table_areas = []
     bounding_boxes = []
     for area in interesting_areas:
         coords = area.split(',')
         if len(coords) == 4:
-            bounding_boxes.append({
-                'x0': float(coords[0]),
-                'y0': float(coords[1]),
-                'x1': float(coords[2]),
-                'y1': float(coords[3])
-            })
+            x1, y1, x2, y2 = float(coords[0]), float(coords[1]), float(coords[2]), float(coords[3])
+            table_areas.append((x1, y1, x2, y2))
+            bounding_boxes.append({'x0': x1, 'y0': y1, 'x1': x2, 'y1': y2})
 
-    for i, (db, header_spans) in enumerate(output_camelot):
-        # log.output('SUCCESS', f'found table: page {pg}, table {i}')
+    if not table_areas:
+        log.output('INFO', f'Page {pg}: No table areas detected by YOLO')
+        return []
 
-        # Get bounding box for this table (if available)
-        bbox = bounding_boxes[i] if i < len(bounding_boxes) else None
+    # Debug: log the actual coordinates
+    for i, (x1, y1, x2, y2) in enumerate(table_areas):
+        log.output('INFO', f'Page {pg}: YOLO bbox {i}: ({x1:.1f}, {y1:.1f}, {x2:.1f}, {y2:.1f})')
 
-        # Build structure_json from DataFrame
-        structure = build_structure_json(db)
+    log.output('INFO', f'Page {pg}: Running MultiExtractor on {len(table_areas)} YOLO-detected area(s)')
 
-        # Add header spans for hierarchical header rendering
+    # Run MultiExtractor with enabled libraries
+    multi_extractor = MultiExtractor(enabled_libraries=enabled_libraries)
+    cache_ttl = getattr(settings, 'EXTRACTION_VARIANTS_CACHE_TTL', 600)
+
+    report = []
+
+    # Process each YOLO-detected table area
+    for i, table_area in enumerate(table_areas):
+        bbox = bounding_boxes[i]
+
+        try:
+            # Get ALL variants from all extractors for this table area
+            all_variants = multi_extractor.extract_all_with_scores(
+                pdf_path=pdf_file,
+                page_num=pg,
+                table_areas=[table_area]
+            )
+        except Exception as e:
+            log.output('WARNING', f'Page {pg} table {i}: MultiExtractor failed: {e}')
+            continue
+
+        # Filter valid variants
+        valid_variants = [v for v in all_variants if v.get('dataframe') is not None and v.get('rows', 0) > 0]
+
+        if not valid_variants:
+            log.output('INFO', f'Page {pg} table {i}: No valid extractions from any method')
+            continue
+
+        # Get best variant (sorted by score)
+        best_variant = valid_variants[0]
+        log.output('INFO', f'Page {pg} table {i}: Best method = {best_variant["method"]} (score={best_variant["score"]:.3f})')
+
+        # Process the best result
+        table = best_variant['dataframe'].copy()
+        table = table.fillna("")
+        table = strip_empty_rows_and_cols(table)
+
+        header_spans = []
+        if merge_headers:
+            table, header_spans = process_table_headers(table, merge_headers=True)
+
+        if not tableValidate(table):
+            log.output('INFO', f'Page {pg} table {i}: Best result failed validation')
+            continue
+
+        # Build structure_json
+        structure = build_structure_json(table, best_variant.get('metadata'))
         if header_spans:
             structure['header_spans'] = header_spans
 
-        # Get confidence from parsing report (if available)
-        confidence = None
-        if i < len(report) and report[i]:
-            confidence = report[i].get('accuracy', 0) / 100.0  # Convert 0-100 to 0-1
+        # Get page dimensions for coordinate conversion
+        page_width = pdf_page.mediabox.width
+        page_height = pdf_page.mediabox.height
 
-        # Short unique ID to prevent django-cleanup conflicts (deferred deletion)
+        # Convert PDF coords to percentage (0-100) for TableSelection
+        x1_pct = (bbox['x0'] / float(page_width)) * 100
+        x2_pct = (bbox['x1'] / float(page_width)) * 100
+        # Y-flip: PDF origin is bottom-left, canvas is top-left
+        y1_pct = (1 - bbox['y1'] / float(page_height)) * 100
+        y2_pct = (1 - bbox['y0'] / float(page_height)) * 100
+        # Ensure valid box: y1 < y2 (top < bottom in screen coords)
+        if y1_pct > y2_pct:
+            y1_pct, y2_pct = y2_pct, y1_pct
+
+        # Create TableSelection record for this table
+        selection = TableSelection.objects.create(
+            report=report_db,
+            page_num=pg,
+            x1=x1_pct,
+            y1=y1_pct,
+            x2=x2_pct,
+            y2=y2_pct,
+            confidence=best_variant['confidence'],
+            source='auto',
+            status='approved',
+        )
+
+        # Cache ALL variants for method switching
+        cache_key = _cache_key_for_selection(report_db.id, selection.id)
+        cache.set(cache_key, _serialize_variants_for_cache(all_variants), timeout=cache_ttl)
+        log.output('INFO', f'Page {pg} table {i}: Cached {len(all_variants)} variants (selection_id={selection.id})')
+
+        # Build parsing report for return value
+        parsing_report = {
+            'accuracy': best_variant['confidence'] * 100,
+            'whitespace': 0,
+            'extraction_method': best_variant['method'],
+        }
+        report.append(parsing_report)
+
+        # Short unique ID to prevent django-cleanup conflicts
         uid = uuid.uuid4().hex[:6]
 
+        # Export to each file type and save to database
         for key, value in extract_dir.items():
-            # build path for file and export (simplified naming)
             e_name = f"p{pg}_t{i}_{uid}.{key}"
             e_path = value / e_name
 
-            # export to file
             if key == "csv":
-                db.to_csv(str(e_path), index=False)
+                table.to_csv(str(e_path), index=False)
             elif key == "json":
-                db.to_json(str(e_path), orient="columns")
+                json_output = json_lib.loads(table.to_json(orient="columns"))
+                json_output['_extraction_metadata'] = {
+                    'method': best_variant['method'],
+                    'page_num': pg,
+                    'table_num': i,
+                    'page_type': page_type,
+                }
+                with open(str(e_path), 'w') as f:
+                    json_lib.dump(json_output, f)
             elif key == "xlsx":
-                # Export to XLSX with cell spans and header formatting (US-018)
-                export_to_xlsx(db, str(e_path), structure_json=structure, header_rows=len(header_spans) + 1 if header_spans else 1)
+                export_to_xlsx(table, str(e_path), structure_json=structure, header_rows=len(header_spans) + 1 if header_spans else 1)
 
-            # build cleaned path for database
             db_path = PurePath(PurePath(e_path).parts[-3], key, PurePath(e_path).name)
 
-            # create csv database instance with rich fields (US-017)
+            # Create Extracted record with selection link
             Extracted.objects.create(
                 report=report_db,
                 file=str(db_path),
                 f_type=key,
                 page_num=pg,
                 table_num=i,
-                # Rich metadata fields
                 page_type=page_type,
-                extraction_method=f'camelot_{actual_flavor}',
-                confidence_score=confidence,
+                extraction_method=best_variant['method'],
+                confidence_score=best_variant['confidence'],
                 structure_json=structure,
                 bounding_box=bbox,
+                selection=selection,
             )
 
-    # log.output('INFO', f'finished processing page {page_number}')
+    log.output('INFO', f'Page {pg}: Extracted {len(report)} table(s) with variant caching')
 
     return report
 
@@ -452,8 +445,111 @@ def detect_tables(file_path, page_number, output_type, report_db, extract_dir,
 # %%
 
 
+def extract_tables_with_all_variants(
+    file_path: str,
+    page_number: int,
+    merge_headers: bool = True,
+    enabled_libraries: dict = None
+) -> dict:
+    """
+    Extract tables and return ALL variants from all extractors.
+
+    Unlike extract_tables_direct_readonly which returns only the best results,
+    this function returns all extraction variants for caching and method switching.
+
+    Args:
+        file_path: Path to PDF file
+        page_number: Page number to process (1-indexed)
+        merge_headers: Whether to merge fragmented multi-row headers
+        enabled_libraries: Dict of library toggles (camelot, pdfplumber, pymupdf, vision)
+
+    Returns:
+        dict with:
+            - 'all_variants': List of dicts from extract_all_with_scores()
+            - 'best_results': List of processed ExtractionResult objects
+            - 'table_bboxes': List of bounding boxes for each table (PDF coords)
+    """
+    log = Logging()
+    pg = page_number
+
+    log.output('INFO', f'[extract-with-variants] Starting extraction for page {pg}')
+
+    multi_extractor = MultiExtractor(enabled_libraries=enabled_libraries)
+
+    try:
+        # Get ALL variants from all extractors
+        all_variants = multi_extractor.extract_all_with_scores(
+            pdf_path=file_path,
+            page_num=pg,
+            table_areas=None
+        )
+    except Exception as e:
+        log.output('WARNING', f'[extract-with-variants] All extractors failed: {e}')
+        return {'all_variants': [], 'best_results': [], 'table_bboxes': []}
+
+    # Filter valid variants and find the best one
+    valid_variants = [v for v in all_variants if v.get('dataframe') is not None and v.get('rows', 0) > 0]
+
+    if not valid_variants:
+        log.output('INFO', f'[extract-with-variants] No valid tables found on page {pg}')
+        return {'all_variants': all_variants, 'best_results': [], 'table_bboxes': []}
+
+    # Get best result (highest score)
+    best_variant = valid_variants[0]  # Already sorted by score
+
+    # Process the best result
+    table = best_variant['dataframe'].copy()
+    table = table.fillna("")
+    table = strip_empty_rows_and_cols(table)
+
+    header_spans = []
+    if merge_headers:
+        table, header_spans = process_table_headers(table, merge_headers=True)
+
+    if not tableValidate(table):
+        log.output('INFO', f'[extract-with-variants] Best table failed validation on page {pg}')
+        return {'all_variants': all_variants, 'best_results': [], 'table_bboxes': []}
+
+    # Build structure_json
+    structure = build_structure_json(table, best_variant.get('metadata'))
+    if header_spans:
+        structure['header_spans'] = header_spans
+
+    # Create ExtractionResult for the best result
+    enriched_metadata = dict(best_variant.get('metadata') or {})
+    enriched_metadata['structure_json'] = structure
+    enriched_metadata['header_spans'] = header_spans
+    enriched_metadata['parsing_report'] = {
+        'accuracy': best_variant['confidence'] * 100,
+        'whitespace': 0,
+        'extraction_method': best_variant['method'],
+    }
+
+    best_result = ExtractionResult(
+        dataframe=table,
+        confidence=best_variant['confidence'],
+        method=best_variant['method'],
+        metadata=enriched_metadata
+    )
+
+    # Extract bounding box if available
+    table_bboxes = []
+    bbox = best_variant.get('metadata', {}).get('bounding_box') if best_variant.get('metadata') else None
+    if bbox:
+        table_bboxes.append(bbox)
+
+    log.output('INFO', f'[extract-with-variants] Page {pg}: found 1 table, {len(all_variants)} variants')
+
+    return {
+        'all_variants': all_variants,
+        'best_results': [best_result],
+        'table_bboxes': table_bboxes
+    }
+
+
 def extract_tables_direct_readonly(file_path: str, page_number: int,
-                                   merge_headers: bool = True) -> List[ExtractionResult]:
+                                   merge_headers: bool = True,
+                                   enabled_libraries: dict = None) -> List[ExtractionResult]:
     """
     Extract tables directly using multiple extractors without saving.
 
@@ -469,6 +565,7 @@ def extract_tables_direct_readonly(file_path: str, page_number: int,
         file_path: Path to PDF file
         page_number: Page number to process
         merge_headers: Whether to merge fragmented multi-row headers
+        enabled_libraries: Dict of library toggles (camelot, pdfplumber, pymupdf, vision)
 
     Returns:
         List[ExtractionResult]: Processed extraction results with all metadata populated
@@ -479,7 +576,7 @@ def extract_tables_direct_readonly(file_path: str, page_number: int,
     log.output('INFO', f'[multi-extractor-readonly] Starting extraction for page {pg}')
 
     # Use MultiExtractor to run all backends and select best
-    multi_extractor = MultiExtractor()
+    multi_extractor = MultiExtractor(enabled_libraries=enabled_libraries)
 
     try:
         best_results, comparison = multi_extractor.extract_with_comparison(

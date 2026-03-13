@@ -56,7 +56,7 @@ def _deserialize_variants_from_cache(data: str) -> list:
 
 @shared_task(bind=True)
 def extract_tables_task(self, report_id, file_path, start_page, end_page,
-                        flavor='auto', row_tol=2, strip_text='\n', merge_headers=True):
+                        enabled_libraries=None, strip_text='\n', merge_headers=True):
     """
     Async task to extract tables from a PDF document.
     Updates task state with progress for SSE streaming.
@@ -66,11 +66,12 @@ def extract_tables_task(self, report_id, file_path, start_page, end_page,
         file_path: Path to PDF file
         start_page: Starting page number
         end_page: Ending page number (-1 for all)
-        flavor: Camelot flavor ('auto', 'lattice', or 'stream')
-        row_tol: Row tolerance for stream flavor
+        enabled_libraries: Dict of library toggles (camelot, pdfplumber, pymupdf, vision)
         strip_text: Characters to strip from cell text
         merge_headers: Whether to merge fragmented multi-row headers
     """
+    if enabled_libraries is None:
+        enabled_libraries = {'camelot': True, 'pdfplumber': True, 'pymupdf': True, 'vision': True}
     log = Logging()
 
     # Update state to show we've started
@@ -95,7 +96,7 @@ def extract_tables_task(self, report_id, file_path, start_page, end_page,
             }
 
         log.output("INFO", f"[Task {self.request.id}] Starting extraction for report {report_id}")
-        log.output("INFO", f"[Task {self.request.id}] Options: flavor={flavor}, merge_headers={merge_headers}")
+        log.output("INFO", f"[Task {self.request.id}] Options: enabled_libraries={enabled_libraries}, merge_headers={merge_headers}")
 
         # Update progress
         self.update_state(state='PROGRESS', meta={
@@ -115,8 +116,10 @@ def extract_tables_task(self, report_id, file_path, start_page, end_page,
         # Run extraction with options
         extracted = table_extract.extract(
             file_path, start_page, end_page,
-            flavor=flavor, row_tol=row_tol, strip_text=strip_text,
-            merge_headers=merge_headers, report_id=report_id,
+            enabled_libraries=enabled_libraries,
+            strip_text=strip_text,
+            merge_headers=merge_headers,
+            report_id=report_id,
             progress_callback=update_progress
         )
 
@@ -412,12 +415,32 @@ def extract_from_selections(self, report_id):
 
         for i, selection in enumerate(all_selections):
             page_num = selection.page_num
-            progress = 10 + int(80 * (i / total_selections))
-            self.update_state(state='PROGRESS', meta={
-                'current': progress,
-                'total': 100,
-                'status': f'Extracting table from page {page_num} (selection {i + 1}/{total_selections})...'
-            })
+
+            # Create progress callback for detailed method-level updates
+            # Map technical method names to user-friendly descriptions
+            method_descriptions = {
+                'camelot_lattice': 'Detecting table borders',
+                'camelot_stream': 'Analyzing whitespace layout',
+                'pdfplumber': 'Scanning PDF structure',
+                'pdfplumber_text': 'Extracting text patterns',
+                'pymupdf': 'Processing document layers',
+                'pymupdf_text': 'Reading text alignment',
+                'img2table': 'Running visual recognition',
+            }
+
+            def make_progress_callback(sel_idx, sel_total):
+                def callback(method_name, method_idx, method_total):
+                    # Progress: 10-90% range, split between selections and methods
+                    base = 10 + int(80 * sel_idx / sel_total)
+                    method_increment = int(80 / sel_total * method_idx / method_total)
+                    progress = base + method_increment
+                    description = method_descriptions.get(method_name, method_name)
+                    self.update_state(state='PROGRESS', meta={
+                        'current': progress,
+                        'total': 100,
+                        'message': f'Table {sel_idx + 1}/{sel_total}: {description} (method {method_idx}/{method_total})'
+                    })
+                return callback
 
             # Get the table area for this selection
             with fitz.open(file_path) as pdf_doc:
@@ -438,7 +461,8 @@ def extract_from_selections(self, report_id):
                 all_variants = multi_extractor.extract_all_with_scores(
                     pdf_path=file_path,
                     page_num=page_num,
-                    table_areas=[table_area]
+                    table_areas=[table_area],
+                    progress_callback=make_progress_callback(i, total_selections)
                 )
 
                 # Filter out failed/empty results for display but keep them in cache

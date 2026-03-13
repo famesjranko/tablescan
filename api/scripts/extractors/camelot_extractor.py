@@ -119,10 +119,66 @@ class CamelotExtractor(BaseExtractor):
             logger.warning(f"[{self.name}] No table_areas provided - pipeline error, skipping")
             return []
 
-        # Camelot expects comma-separated strings: ["x1,y1,x2,y2", ...]
-        camelot_areas = [
-            f"{x1},{y1},{x2},{y2}" for (x1, y1, x2, y2) in table_areas
-        ]
+        # For lattice mode, auto-detect on whole page then filter by YOLO regions
+        # This is faster than cropping (1 Camelot call vs N) while still accurate
+        if self._flavor == 'lattice':
+            try:
+                from .base import BoundingBox
+
+                auto_tables = camelot.read_pdf(**kwargs)  # No table_areas = auto-detect
+                if auto_tables and len(auto_tables) > 0:
+                    # Filter to tables overlapping with YOLO regions
+                    results = []
+                    for i, table in enumerate(auto_tables):
+                        if not self._is_valid_table(table.df):
+                            continue
+
+                        # Check if table overlaps with any YOLO region
+                        if hasattr(table, '_bbox') and table._bbox:
+                            cam_x1, cam_y1, cam_x2, cam_y2 = table._bbox
+
+                            overlaps_region = None
+                            for region_idx, (yolo_x1, yolo_y1, yolo_x2, yolo_y2) in enumerate(table_areas):
+                                # Normalize YOLO coords (input has y1 > y2)
+                                yolo_bbox = BoundingBox.from_pdf_coords(yolo_x1, yolo_y1, yolo_x2, yolo_y2)
+                                # Check overlap (Camelot bbox has y1 < y2)
+                                if (cam_x1 < yolo_bbox.x2 and cam_x2 > yolo_bbox.x1 and
+                                    cam_y1 < yolo_bbox.y2 and cam_y2 > yolo_bbox.y1):
+                                    overlaps_region = region_idx
+                                    break
+
+                            if overlaps_region is None:
+                                logger.debug(f"[{self.name}] Table {i} doesn't overlap YOLO regions, skipping")
+                                continue
+
+                        df = self._clean_dataframe(table.df)
+                        confidence = self._get_confidence(table)
+                        metadata = self._build_metadata(table, i, page_num)
+                        if overlaps_region is not None:
+                            metadata['yolo_region'] = overlaps_region
+                        results.append(ExtractionResult(
+                            dataframe=df,
+                            confidence=confidence,
+                            method=self.name,
+                            metadata=metadata
+                        ))
+
+                    if results:
+                        logger.info(f"[{self.name}] Auto-detect found {len(results)} table(s) in YOLO regions")
+                        return results
+            except Exception as e:
+                logger.debug(f"[{self.name}] Auto-detection failed: {e}, trying with exact bounds")
+
+        # Use BoundingBox for coordinate normalization
+        # Input is from bboxes_pdf: y1=top (high), y2=bottom (low)
+        # Camelot expects y1 > y2 (top > bottom, non-standard)
+        from .base import BoundingBox
+        camelot_areas = []
+        for (x1, y1, x2, y2) in table_areas:
+            bbox = BoundingBox.from_pdf_coords(x1, y1, x2, y2)
+            camelot_area = bbox.to_camelot()
+            logger.debug(f"[{self.name}] Input: ({x1:.1f}, {y1:.1f}, {x2:.1f}, {y2:.1f}) -> Camelot: {camelot_area}")
+            camelot_areas.append(camelot_area)
         kwargs['table_areas'] = camelot_areas
 
         # Run Camelot extraction

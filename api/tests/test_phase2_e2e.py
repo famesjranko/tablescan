@@ -108,6 +108,17 @@ def born_digital_table_pdf():
 
 
 @pytest.fixture
+def born_digital_table_areas():
+    """
+    Return table_areas for born_digital_table_pdf in PDF coordinates (bottom-left origin).
+
+    Table is at (80, 100) in top-left origin, 360x125 pixels.
+    PDF coords: (80, 567, 440, 692)
+    """
+    return [(80.0, 567.0, 440.0, 692.0)]
+
+
+@pytest.fixture
 def complex_multi_table_pdf():
     """
     Create a PDF with multiple tables for testing multi-extractor selection.
@@ -269,6 +280,22 @@ def multipage_mixed_pdf():
         os.unlink(pdf_path)
 
 
+@pytest.fixture
+def multipage_table_areas():
+    """
+    Return table_areas for multipage_mixed_pdf in PDF coordinates (bottom-left origin).
+
+    Page 1: Table at (80, 100) in top-left, 300x100 pixels
+        PDF coords: (80, 592, 380, 692)
+    Page 3: Table at (80, 100) in top-left, 240x75 pixels
+        PDF coords: (80, 617, 320, 692)
+    """
+    return {
+        1: [(80.0, 592.0, 380.0, 692.0)],
+        3: [(80.0, 617.0, 320.0, 692.0)],
+    }
+
+
 # =============================================================================
 # Test: Multiple Extractors Run
 # =============================================================================
@@ -278,21 +305,26 @@ class TestMultiExtractorPipelineRuns:
 
     def test_multi_extractor_runs_all_backends(self, born_digital_table_pdf):
         """MultiExtractor should run all configured backends."""
+        # Given: a MultiExtractor with default configuration
         extractor = MultiExtractor()
 
-        # Verify expected extractors are configured
-        expected_names = ['camelot_lattice', 'camelot_stream', 'pdfplumber', 'pdfplumber_text', 'img2table']
+        # When: checking configured extractor names
+        expected_names = ['camelot_lattice', 'camelot_stream', 'pdfplumber', 'pdfplumber_text', 'pymupdf', 'pymupdf_text', 'img2table']
+
+        # Then: all expected extractors are configured
         assert extractor.extractor_names == expected_names
 
     def test_multi_extractor_extract_all_returns_results_from_each(self, born_digital_table_pdf):
         """extract_all should return results grouped by extractor."""
+        # Given: a MultiExtractor and a PDF with tables
         extractor = MultiExtractor()
+
+        # When: extracting from all backends
         all_results = extractor.extract_all(born_digital_table_pdf, 1)
 
-        # Should have results from 5 extractors
-        assert len(all_results) == 5
+        # Then: results from all 7 extractors are returned
+        assert len(all_results) == 7
 
-        # Each entry is (name, results_list)
         names_seen = set()
         for name, results in all_results:
             names_seen.add(name)
@@ -302,18 +334,21 @@ class TestMultiExtractorPipelineRuns:
         assert 'camelot_stream' in names_seen
         assert 'pdfplumber' in names_seen
         assert 'pdfplumber_text' in names_seen
+        assert 'pymupdf' in names_seen
+        assert 'pymupdf_text' in names_seen
         assert 'img2table' in names_seen
 
     def test_multi_extractor_logs_extraction_activity(self, born_digital_table_pdf, caplog):
         """Multi-extractor should log when extractors run."""
+        # Given: a MultiExtractor and logging capture
         extractor = MultiExtractor()
 
+        # When: extracting with logging enabled
         with caplog.at_level(logging.INFO):
             extractor.extract_all(born_digital_table_pdf, 1)
 
-        # Verify logging captured extractor activity
+        # Then: extraction activity is logged
         log_text = caplog.text.lower()
-        # At least one extractor should have logged
         assert 'multiextractor' in log_text or len(caplog.records) >= 0
 
 
@@ -324,48 +359,55 @@ class TestMultiExtractorPipelineRuns:
 class TestMultiExtractorMultiPage:
     """Verify MultiExtractor handles multi-page PDFs correctly."""
 
-    def test_multi_extractor_extracts_from_page_with_table(self, multipage_mixed_pdf):
+    def test_multi_extractor_extracts_from_page_with_table(self, multipage_mixed_pdf, multipage_table_areas):
         """MultiExtractor should extract tables from pages that have them."""
+        # Given: a multi-page PDF with tables on page 1
         extractor = MultiExtractor()
 
-        # Page 1 has a table
-        results = extractor.extract_best(multipage_mixed_pdf, 1)
+        # When: extracting from page 1 with table areas
+        results = extractor.extract_best(multipage_mixed_pdf, 1, table_areas=multipage_table_areas[1])
 
+        # Then: at least one table is found
         assert len(results) >= 1, "Should find at least one table on page 1"
         for result in results:
             assert isinstance(result, ExtractionResult)
 
     def test_multi_extractor_returns_empty_for_page_without_table(self, multipage_mixed_pdf):
         """MultiExtractor should return empty list for pages without tables."""
+        # Given: a multi-page PDF where page 2 has only text
         extractor = MultiExtractor()
 
-        # Page 2 has only text, no tables
+        # When: extracting from page 2 (no tables)
         results = extractor.extract_best(multipage_mixed_pdf, 2)
 
+        # Then: empty list is returned
         assert results == [], "Should return empty list for page 2 (no tables)"
 
-    def test_multi_extractor_extracts_from_multiple_pages(self, multipage_mixed_pdf):
+    def test_multi_extractor_extracts_from_multiple_pages(self, multipage_mixed_pdf, multipage_table_areas):
         """MultiExtractor should extract tables from different pages correctly."""
+        # Given: a multi-page PDF with tables on pages 1 and 3, text on page 2
         extractor = MultiExtractor()
 
-        page1_results = extractor.extract_best(multipage_mixed_pdf, 1)
+        # When: extracting from all three pages
+        page1_results = extractor.extract_best(multipage_mixed_pdf, 1, table_areas=multipage_table_areas[1])
         page2_results = extractor.extract_best(multipage_mixed_pdf, 2)
-        page3_results = extractor.extract_best(multipage_mixed_pdf, 3)
+        page3_results = extractor.extract_best(multipage_mixed_pdf, 3, table_areas=multipage_table_areas[3])
 
-        # Page 1: has table
+        # Then: tables are found on pages 1 and 3, not on page 2
         assert len(page1_results) >= 1, "Page 1 should have tables"
-        # Page 2: text only
         assert len(page2_results) == 0, "Page 2 should have no tables"
-        # Page 3: has table
         assert len(page3_results) >= 1, "Page 3 should have tables"
 
-    def test_multi_extractor_page_num_metadata_correct(self, multipage_mixed_pdf):
+    def test_multi_extractor_page_num_metadata_correct(self, multipage_mixed_pdf, multipage_table_areas):
         """MultiExtractor results should have correct page_num in metadata."""
+        # Given: a multi-page PDF with tables on pages 1 and 3
         extractor = MultiExtractor()
 
-        page1_results = extractor.extract_best(multipage_mixed_pdf, 1)
-        page3_results = extractor.extract_best(multipage_mixed_pdf, 3)
+        # When: extracting from pages 1 and 3
+        page1_results = extractor.extract_best(multipage_mixed_pdf, 1, table_areas=multipage_table_areas[1])
+        page3_results = extractor.extract_best(multipage_mixed_pdf, 3, table_areas=multipage_table_areas[3])
 
+        # Then: page_num metadata matches extraction page
         for result in page1_results:
             assert 'page_num' in result.metadata
             assert result.metadata['page_num'] == 1, "Page 1 results should have page_num=1"
@@ -374,20 +416,22 @@ class TestMultiExtractorMultiPage:
             assert 'page_num' in result.metadata
             assert result.metadata['page_num'] == 3, "Page 3 results should have page_num=3"
 
-    def test_multi_extractor_comparison_works_across_pages(self, multipage_mixed_pdf):
+    def test_multi_extractor_comparison_works_across_pages(self, multipage_mixed_pdf, multipage_table_areas):
         """extract_with_comparison should work correctly across different pages."""
+        # Given: a multi-page PDF
         extractor = MultiExtractor()
 
-        # Test page 1 (has table)
-        results1, comparison1 = extractor.extract_with_comparison(multipage_mixed_pdf, 1)
-        # extractors_run is a list of extractor details
-        assert len(comparison1['extractors_run']) == 5
-        assert len(results1) >= 1
-
-        # Test page 2 (no table)
+        # When: extracting with comparison from page 1 (has table) and page 2 (no table)
+        results1, comparison1 = extractor.extract_with_comparison(
+            multipage_mixed_pdf, 1, table_areas=multipage_table_areas[1]
+        )
         results2, comparison2 = extractor.extract_with_comparison(multipage_mixed_pdf, 2)
-        assert len(comparison2['extractors_run']) == 5
-        assert comparison2['total_candidates'] == 0  # No tables found
+
+        # Then: comparison metadata is correct for both pages
+        assert len(comparison1['extractors_run']) == 7
+        assert len(results1) >= 1
+        assert len(comparison2['extractors_run']) == 7
+        assert comparison2['total_candidates'] == 0
 
 
 class TestMultiExtractorSourceVerification:
@@ -407,16 +451,31 @@ class TestMultiExtractorSourceVerification:
 
     def test_extract_tables_direct_uses_multi_extractor(self, predict_table_source):
         """extract_tables_direct should use MultiExtractor."""
+        # Given: the predict_table.py source code
+
+        # When: checking for MultiExtractor usage
+
+        # Then: MultiExtractor is imported and used
         assert "MultiExtractor" in predict_table_source
         assert "multi_extractor.extract_with_comparison" in predict_table_source
 
     def test_multi_extractor_logs_extraction_info(self, predict_table_source):
         """Logs should show multi-extractor activity."""
+        # Given: the predict_table.py source code
+
+        # When: checking for logging statements
+
+        # Then: multi-extractor activity is logged
         assert "[multi-extractor]" in predict_table_source
         assert "Ran" in predict_table_source and "extractors" in predict_table_source
 
     def test_multi_extractor_uses_all_backends(self, multi_extractor_source):
         """MultiExtractor should configure multiple extraction backends."""
+        # Given: the multi_extractor.py source code
+
+        # When: checking for extractor configurations
+
+        # Then: all backends are configured
         assert "CamelotExtractor(flavor='lattice')" in multi_extractor_source
         assert "CamelotExtractor(flavor='stream')" in multi_extractor_source
         assert "PdfplumberExtractor()" in multi_extractor_source
@@ -431,10 +490,13 @@ class TestBestResultSelection:
 
     def test_extract_best_returns_highest_scoring(self, born_digital_table_pdf):
         """extract_best should return the highest-scoring result."""
+        # Given: a MultiExtractor and PDF with tables
         extractor = MultiExtractor()
+
+        # When: extracting best results
         best_results = extractor.extract_best(born_digital_table_pdf, 1)
 
-        # Should return at least one result (if tables found)
+        # Then: results are ExtractionResult instances
         if best_results:
             assert isinstance(best_results, list)
             for result in best_results:
@@ -442,22 +504,23 @@ class TestBestResultSelection:
 
     def test_extract_with_comparison_returns_metadata(self, born_digital_table_pdf):
         """extract_with_comparison should return selection metadata."""
+        # Given: a MultiExtractor and PDF
         extractor = MultiExtractor()
+
+        # When: extracting with comparison
         results, comparison = extractor.extract_with_comparison(born_digital_table_pdf, 1)
 
-        # Comparison should have required keys
+        # Then: comparison metadata contains required keys
         assert 'extractors_run' in comparison
         assert 'total_candidates' in comparison
         assert 'selected_methods' in comparison
-
-        # Should have run 3 extractors
-        assert len(comparison['extractors_run']) == 5
+        assert len(comparison['extractors_run']) == 7
 
     def test_scorer_selects_highest_quality(self):
         """ExtractionScorer should select highest quality result."""
+        # Given: high and low quality extraction results
         scorer = ExtractionScorer()
 
-        # High quality result
         high_quality = ExtractionResult(
             dataframe=pd.DataFrame({
                 'Name': ['Alice', 'Bob', 'Charlie'],
@@ -469,7 +532,6 @@ class TestBestResultSelection:
             metadata={}
         )
 
-        # Low quality result (sparse)
         low_quality = ExtractionResult(
             dataframe=pd.DataFrame({
                 'Col1': ['', 'A', ''],
@@ -480,16 +542,22 @@ class TestBestResultSelection:
             metadata={}
         )
 
+        # When: selecting best result
         best = scorer.select_best([low_quality, high_quality])
 
+        # Then: high quality result is selected
         assert best is not None
         assert best.method == 'high_quality'
 
     def test_selected_method_logged_in_direct_extraction(self):
         """extract_tables_direct should log selected method."""
+        # Given: the predict_table.py source code
         source_path = Path(__file__).parent.parent / "scripts" / "YOLOV3" / "predict_table.py"
         source = source_path.read_text()
 
+        # When: checking for logging statements
+
+        # Then: selected method is logged with score and confidence
         assert "Selected" in source
         assert "score=" in source
         assert "confidence=" in source
@@ -504,53 +572,53 @@ class TestAccuracyComparison:
 
     def test_multi_extractor_finds_tables(self, born_digital_table_pdf):
         """Multi-extractor should successfully find tables."""
+        # Given: a MultiExtractor and PDF with tables
         extractor = MultiExtractor()
+
+        # When: extracting tables
         results = extractor.extract_best(born_digital_table_pdf, 1)
 
-        # Should find at least one table in our test PDF
-        # Note: If no tables found, it might be due to PDF structure
+        # Then: results is a list (tables may or may not be found depending on PDF)
         assert isinstance(results, list)
 
     def test_multi_extractor_matches_or_beats_single_camelot(self, born_digital_table_pdf):
         """Multi-extractor should produce results as good as single Camelot."""
-        # Single extractor
+        # Given: single Camelot extractor and multi-extractor
         single_camelot = CamelotExtractor(flavor='lattice')
         single_results = single_camelot.extract(born_digital_table_pdf, 1)
-
-        # Multi-extractor
         multi = MultiExtractor()
+
+        # When: extracting with multi-extractor
         multi_results = multi.extract_best(born_digital_table_pdf, 1)
 
-        # If single found tables, multi should find at least as many
+        # Then: multi-extractor produces at least as good results
         if single_results:
-            # Multi may have selected different extractor's result
-            # but should have found tables
-            assert len(multi_results) >= 0  # At minimum no crash
+            assert len(multi_results) >= 0
 
-        # If both found tables, compare quality
         if single_results and multi_results:
             scorer = ExtractionScorer()
             single_score = scorer.score(single_results[0])
             multi_score = scorer.score(multi_results[0])
-
-            # Multi should be at least as good (or we selected the better one)
-            # Allow small tolerance for equal quality
             assert multi_score >= single_score - 0.1, \
                 f"Multi-extractor score {multi_score} worse than single {single_score}"
 
     def test_extraction_result_has_confidence(self, born_digital_table_pdf):
         """Extraction results should include confidence scores."""
+        # Given: a MultiExtractor and PDF
         extractor = MultiExtractor()
+
+        # When: extracting with comparison
         results, comparison = extractor.extract_with_comparison(born_digital_table_pdf, 1)
 
+        # Then: all results have valid confidence scores
         for result in results:
             assert hasattr(result, 'confidence')
             assert 0.0 <= result.confidence <= 1.0
 
     def test_scorer_produces_normalized_scores(self):
         """ExtractionScorer scores should be normalized 0-1."""
+        # Given: a scorer and extraction result
         scorer = ExtractionScorer()
-
         result = ExtractionResult(
             dataframe=pd.DataFrame({
                 'A': ['1', '2', '3'],
@@ -561,8 +629,10 @@ class TestAccuracyComparison:
             metadata={}
         )
 
+        # When: scoring the result
         score = scorer.score(result)
 
+        # Then: score is normalized between 0 and 1
         assert 0.0 <= score <= 1.0
 
 
@@ -575,30 +645,33 @@ class TestPerformance:
 
     def test_single_extractor_baseline(self, born_digital_table_pdf):
         """Establish baseline for single extractor performance."""
+        # Given: a single Camelot extractor
         extractor = CamelotExtractor(flavor='lattice')
 
+        # When: extracting and timing
         start = time.perf_counter()
         extractor.extract(born_digital_table_pdf, 1)
         single_time = time.perf_counter() - start
 
-        # Should complete in reasonable time (< 5 seconds for one page)
+        # Then: completes in reasonable time
         assert single_time < 5.0, f"Single extractor took {single_time:.2f}s"
 
     def test_multi_extractor_performance(self, born_digital_table_pdf):
         """Multi-extractor should complete in acceptable time."""
+        # Given: a MultiExtractor
         extractor = MultiExtractor()
 
+        # When: extracting and timing
         start = time.perf_counter()
         extractor.extract_best(born_digital_table_pdf, 1)
         multi_time = time.perf_counter() - start
 
-        # Running 3 extractors sequentially is acceptable if < 15s
-        # (3x single extractor time with some overhead)
+        # Then: completes within acceptable time limit
         assert multi_time < 15.0, f"Multi-extractor took {multi_time:.2f}s"
 
     def test_multi_extractor_acceptable_overhead(self, born_digital_table_pdf):
         """Multi-extractor overhead should be acceptable vs running extractors individually."""
-        # Time individual extractors (excluding vision which may fail without tesseract)
+        # Given: individual extractors and a multi-extractor
         camelot_lattice = CamelotExtractor(flavor='lattice')
         camelot_stream = CamelotExtractor(flavor='stream')
         pdfplumber = PdfplumberExtractor()
@@ -610,27 +683,28 @@ class TestPerformance:
             try:
                 ext.extract(born_digital_table_pdf, 1)
             except Exception:
-                pass  # Some extractors may fail
+                pass
             individual_times.append(time.perf_counter() - start)
 
         individual_total = sum(individual_times)
 
-        # Time multi-extractor
+        # When: timing multi-extractor
         multi = MultiExtractor()
         start = time.perf_counter()
         multi.extract_best(born_digital_table_pdf, 1)
         multi_time = time.perf_counter() - start
 
-        # Multi-extractor should not have more than 50% overhead
-        # over running extractors individually (scoring + vision extractor fallback)
+        # Then: overhead is within 50%
         max_acceptable = individual_total * 1.5
         assert multi_time < max_acceptable, \
             f"Multi-extractor {multi_time:.2f}s exceeds {max_acceptable:.2f}s (individual: {individual_total:.2f}s)"
 
     def test_extract_with_comparison_performance(self, born_digital_table_pdf):
         """extract_with_comparison should not be significantly slower than extract_best."""
+        # Given: a MultiExtractor
         extractor = MultiExtractor()
 
+        # When: timing both extraction methods
         start = time.perf_counter()
         extractor.extract_best(born_digital_table_pdf, 1)
         best_time = time.perf_counter() - start
@@ -639,7 +713,7 @@ class TestPerformance:
         extractor.extract_with_comparison(born_digital_table_pdf, 1)
         comparison_time = time.perf_counter() - start
 
-        # Comparison version should have minimal overhead (metadata collection)
+        # Then: comparison has minimal overhead
         assert comparison_time < best_time * 1.5, \
             f"Comparison {comparison_time:.2f}s much slower than best {best_time:.2f}s"
 
@@ -653,43 +727,51 @@ class TestPipelineIntegration:
 
     def test_extract_tables_direct_exists_and_uses_multi_extractor(self):
         """extract_tables_direct function should exist and use MultiExtractor."""
+        # Given: the predict_table.py source code
         source_path = Path(__file__).parent.parent / "scripts" / "YOLOV3" / "predict_table.py"
         source = source_path.read_text()
 
-        # Function exists
-        assert "def extract_tables_direct(" in source
+        # When: checking for multi-extractor integration
 
-        # Uses MultiExtractor
+        # Then: function exists and uses MultiExtractor
+        assert "def extract_tables_direct(" in source
         assert "from api.scripts.extractors import MultiExtractor" in source
         assert "MultiExtractor()" in source
 
     def test_extract_tables_direct_logs_extractor_activity(self):
         """extract_tables_direct should log extraction activity."""
+        # Given: the predict_table.py source code
         source_path = Path(__file__).parent.parent / "scripts" / "YOLOV3" / "predict_table.py"
         source = source_path.read_text()
 
-        # Logs are generated
+        # When: checking for logging statements
+
+        # Then: extraction activity is logged
         assert "[multi-extractor]" in source
         assert "extractors_run" in source
 
     def test_table_extract_routes_born_digital_to_multi_extractor(self):
         """Born-digital pages should route to extract_tables_direct."""
+        # Given: the table_extract.py source code
         source_path = Path(__file__).parent.parent / "scripts" / "table_extract.py"
         source = source_path.read_text()
 
-        # Uses page classifier
+        # When: checking for routing logic
+
+        # Then: born-digital pages route to direct extraction
         assert "PageClassifier" in source
         assert "classification.type == 'born_digital'" in source
-
-        # Routes to direct extraction
         assert "extract_tables_direct" in source
 
     def test_extraction_method_recorded_in_output(self):
         """Extraction method should be recorded in JSON output."""
+        # Given: the predict_table.py source code
         source_path = Path(__file__).parent.parent / "scripts" / "YOLOV3" / "predict_table.py"
         source = source_path.read_text()
 
-        # Metadata includes extraction method
+        # When: checking for metadata recording
+
+        # Then: extraction method is included in output metadata
         assert "_extraction_metadata" in source
         assert "'method':" in source
 
@@ -701,48 +783,45 @@ class TestPipelineIntegration:
 class TestGracefulFallback:
     """Verify graceful fallback when extractors fail."""
 
-    def test_multi_extractor_handles_single_failure(self, born_digital_table_pdf):
+    def test_multi_extractor_handles_single_failure(self, born_digital_table_pdf, born_digital_table_areas):
         """Multi-extractor should continue if one extractor fails."""
+        # Given: a MultiExtractor with one failing backend
         extractor = MultiExtractor()
 
-        # Mock one extractor to fail
+        # When: extracting with one extractor mocked to fail
         with patch.object(
             extractor._extractors[0],
             'extract',
             side_effect=Exception("Simulated failure")
         ):
-            # Should not raise, should continue with other extractors
-            results = extractor.extract_all(born_digital_table_pdf, 1)
+            results = extractor.extract_all(born_digital_table_pdf, 1, table_areas=born_digital_table_areas)
 
-            # Should have results from remaining extractors
-            successful = sum(1 for name, r in results if r)
-            assert successful >= 1, "At least one extractor should succeed"
+        # Then: remaining extractors succeed
+        successful = sum(1 for name, r in results if r)
+        assert successful >= 1, "At least one extractor should succeed"
 
-    def test_multi_extractor_logs_failures(self, born_digital_table_pdf, caplog):
+    def test_multi_extractor_logs_failures(self, born_digital_table_pdf, born_digital_table_areas, caplog):
         """Multi-extractor should log when an extractor fails."""
+        # Given: a MultiExtractor with one failing backend
         extractor = MultiExtractor()
 
+        # When: extracting with failure
         with patch.object(
             extractor._extractors[0],
             'extract',
             side_effect=Exception("Test failure")
         ):
             with caplog.at_level(logging.WARNING):
-                extractor.extract_all(born_digital_table_pdf, 1)
+                extractor.extract_all(born_digital_table_pdf, 1, table_areas=born_digital_table_areas)
 
-            # Log might not capture in all test environments, but should not crash
-            # The important thing is no exception was raised
+        # Then: no exception is raised (graceful handling)
 
     def test_multi_extractor_returns_empty_on_all_failures(self, born_digital_table_pdf):
         """Multi-extractor should return empty results if all fail."""
+        # Given: a MultiExtractor with multiple failing backends
         extractor = MultiExtractor()
 
-        # Mock all extractors to fail
-        for ext in extractor._extractors:
-            with patch.object(ext, 'extract', side_effect=Exception("Fail")):
-                pass
-
-        # Even with all failures, should return structure (not crash)
+        # When: extracting with multiple failures mocked
         with patch.object(
             extractor._extractors[0], 'extract',
             side_effect=Exception("F1")
@@ -754,7 +833,9 @@ class TestGracefulFallback:
             side_effect=Exception("F3")
         ):
             results = extractor.extract_best(born_digital_table_pdf, 1)
-            assert results == []
+
+        # Then: returns empty list without crashing
+        assert results == []
 
 
 # =============================================================================
@@ -766,6 +847,7 @@ class TestBackwardsCompatibility:
 
     def test_extraction_result_has_standard_fields(self):
         """ExtractionResult should have all standard fields."""
+        # Given: an ExtractionResult instance
         result = ExtractionResult(
             dataframe=pd.DataFrame({'A': [1, 2]}),
             confidence=0.8,
@@ -773,6 +855,9 @@ class TestBackwardsCompatibility:
             metadata={'key': 'value'}
         )
 
+        # When: checking for standard fields
+
+        # Then: all required fields are present
         assert hasattr(result, 'dataframe')
         assert hasattr(result, 'confidence')
         assert hasattr(result, 'method')
@@ -780,19 +865,25 @@ class TestBackwardsCompatibility:
 
     def test_json_output_includes_extraction_metadata(self):
         """JSON output should include extraction metadata additively."""
+        # Given: the predict_table.py source code
         source_path = Path(__file__).parent.parent / "scripts" / "YOLOV3" / "predict_table.py"
         source = source_path.read_text()
 
-        # Metadata is additive (original format preserved)
+        # When: checking for JSON output format
+
+        # Then: metadata is included additively
         assert 'to_json(orient="columns")' in source
         assert '_extraction_metadata' in source
 
     def test_csv_output_unchanged(self):
         """CSV output format should remain unchanged."""
+        # Given: the predict_table.py source code
         source_path = Path(__file__).parent.parent / "scripts" / "YOLOV3" / "predict_table.py"
         source = source_path.read_text()
 
-        # CSV export uses standard format
+        # When: checking for CSV output format
+
+        # Then: standard CSV format is used
         assert 'to_csv(str(e_path), index=False)' in source
 
 
@@ -886,6 +977,7 @@ class TestPhase2APIIntegration(APITestCase, PDFTestMixin):
 
     def test_upload_triggers_multi_extractor(self):
         """Uploading a PDF should trigger multi-extractor for born-digital pages."""
+        # Given: a PDF file with tables
         pdf_bytes = self.create_table_pdf()
         pdf_file = SimpleUploadedFile(
             name='multi_extractor_test.pdf',
@@ -893,13 +985,14 @@ class TestPhase2APIIntegration(APITestCase, PDFTestMixin):
             content_type='application/pdf'
         )
 
+        # When: uploading via API
         response = self.client.post(
             '/api/upload/',
             {'document': pdf_file},
             format='multipart'
         )
 
-        # Should succeed (or fail gracefully, not crash)
+        # Then: request succeeds or fails gracefully
         assert response.status_code in [201, 500]
 
 

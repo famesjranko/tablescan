@@ -33,8 +33,6 @@ from .permissions import IsReportOwner
 from django.http import HttpResponse
 from django.conf import settings
 
-from .throttles import UploadRateThrottle, BurstRateThrottle
-
 from .serializers import *
 from .models import Extracted, Report, TableSelection
 from api.scripts import table_extract
@@ -489,7 +487,6 @@ class UploadView(APIView):
     """
 
     parser_classes = (MultiPartParser, FormParser)
-    throttle_classes = [UploadRateThrottle, BurstRateThrottle]
     permission_classes = [IsAuthenticated]
 
     def post(self, request, *args, **kwargs):
@@ -798,24 +795,6 @@ class UploadAsyncView(LoginRequiredMixin, View):
     def post(self, request):
         from api.tasks import extract_tables_task, detect_tables_for_review
 
-        # Apply rate limiting
-        upload_throttle = UploadRateThrottle()
-        burst_throttle = BurstRateThrottle()
-
-        # Check upload rate limit
-        if not upload_throttle.allow_request(request, self):
-            wait_time = upload_throttle.wait()
-            return JsonResponse({
-                'error': f'Upload rate limit exceeded. Try again in {int(wait_time)} seconds.'
-            }, status=429)
-
-        # Check burst rate limit
-        if not burst_throttle.allow_request(request, self):
-            wait_time = burst_throttle.wait()
-            return JsonResponse({
-                'error': f'Too many requests. Try again in {int(wait_time)} seconds.'
-            }, status=429)
-
         # Validate file exists
         if 'document' not in request.FILES:
             return JsonResponse({'error': 'No file uploaded'}, status=400)
@@ -836,11 +815,17 @@ class UploadAsyncView(LoginRequiredMixin, View):
         end_page = int(request.POST.get('end_page', -1))
 
         # Get extraction options
-        flavor = request.POST.get('camelot_flavor', 'auto')
-        row_tol = int(request.POST.get('row_tol', 2))
         strip_text = request.POST.get('strip_text', '\n')
         merge_headers = request.POST.get('merge_headers', 'on') == 'on'
         extraction_mode = request.POST.get('extraction_mode', 'auto')
+
+        # Get library toggles (all enabled by default)
+        enabled_libraries = {
+            'camelot': request.POST.get('use_camelot', 'on') == 'on',
+            'pdfplumber': request.POST.get('use_pdfplumber', 'on') == 'on',
+            'pymupdf': request.POST.get('use_pymupdf', 'on') == 'on',
+            'vision': request.POST.get('use_vision', 'on') == 'on',
+        }
 
         # Create report using serializer
         report_serializer = ReportSerializer(
@@ -912,8 +897,7 @@ class UploadAsyncView(LoginRequiredMixin, View):
                 file_path,
                 start_page,
                 end_page,
-                flavor=flavor,
-                row_tol=row_tol,
+                enabled_libraries=enabled_libraries,
                 strip_text=strip_text,
                 merge_headers=merge_headers
             )

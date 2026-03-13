@@ -45,12 +45,25 @@ Requires Docker, or Python 3.11+ with Redis and Poppler (`apt install poppler-ut
 Browser ──► Django ──► Celery Worker
               │              │
               │         [YOLOv3 Detection]
-              │         [Camelot Parsing]
+              │         [Multi-Extractor Pipeline]
               │              │
          PostgreSQL    Redis (broker)
 ```
 
-**Stack**: Django 4.2 / htmx / Tailwind CSS / Celery / Redis / PostgreSQL / YOLOv3 / Camelot
+**Stack**: Django 4.2 / htmx / Tailwind CSS / Celery / Redis / PostgreSQL / YOLOv3 / Camelot / pdfplumber / PyMuPDF / img2table
+
+### Extraction Libraries
+
+The multi-extractor pipeline runs multiple extraction backends and selects the best result:
+
+| Library | Strategies | Best For |
+|---------|-----------|----------|
+| **Camelot** | lattice, stream | Tables with visible borders or whitespace alignment |
+| **pdfplumber** | lines, text | Born-digital PDFs with clear structure |
+| **PyMuPDF** | lines, text | Alternative algorithm, different edge cases |
+| **img2table** | vision | OCR-based extraction for scanned documents |
+
+Users can enable/disable libraries via checkboxes in the upload form (Advanced Extraction Options).
 
 ## Usage
 
@@ -88,7 +101,8 @@ Browser ──► Django ──► Celery Worker
 │   ├── views.py       # API + template views
 │   ├── tasks.py       # Celery extraction tasks
 │   ├── models.py      # Report, Extracted, TableSelection
-│   └── scripts/       # YOLO + Camelot extraction engine
+│   └── scripts/       # YOLO detection + multi-extractor pipeline
+│       └── extractors/  # Camelot, pdfplumber, PyMuPDF, vision backends
 ├── templates/         # htmx/Tailwind frontend
 ├── tablescan/         # Django settings + Celery config
 ├── Makefile           # Development commands

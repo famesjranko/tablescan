@@ -24,6 +24,7 @@ from api.scripts.extractors import (
     ExtractionScorer,
     PdfplumberExtractor,
 )
+from api.scripts.extractors.base import BoundingBox
 from api.tasks import (
     _cache_key_for_selection,
     _serialize_variants_for_cache,
@@ -191,10 +192,17 @@ class TestExtractAllWithScores:
 
     def test_returns_results_from_all_extractors(self, simple_table_pdf):
         # Given: a PDF with a table and multi-extractor
+        # Table bounds from fixture (fitz coords): x=100, y=200 to x=460, y=320 on 612x792 page
         extractor = MultiExtractor()
+        bbox = BoundingBox.from_yolo(
+            x1=100, y1=200, x2=460, y2=320,
+            img_width=612, img_height=792,
+            page_width=612, page_height=792
+        )
+        table_areas = [bbox.to_tuple()]
 
         # When: extracting with all methods
-        results = extractor.extract_all_with_scores(simple_table_pdf, 1)
+        results = extractor.extract_all_with_scores(simple_table_pdf, 1, table_areas=table_areas)
 
         # Then: should have results from multiple methods
         methods = [r['method'] for r in results if r.get('dataframe') is not None]
@@ -203,9 +211,15 @@ class TestExtractAllWithScores:
     def test_results_sorted_by_score_descending(self, simple_table_pdf):
         # Given: a PDF with a table
         extractor = MultiExtractor()
+        bbox = BoundingBox.from_yolo(
+            x1=100, y1=200, x2=460, y2=320,
+            img_width=612, img_height=792,
+            page_width=612, page_height=792
+        )
+        table_areas = [bbox.to_tuple()]
 
         # When: extracting with all methods
-        results = extractor.extract_all_with_scores(simple_table_pdf, 1)
+        results = extractor.extract_all_with_scores(simple_table_pdf, 1, table_areas=table_areas)
 
         # Then: results should be sorted by score descending
         scores = [r.get('score', 0) for r in results]
@@ -214,9 +228,15 @@ class TestExtractAllWithScores:
     def test_result_structure_contains_required_fields(self, simple_table_pdf):
         # Given: a PDF with a table
         extractor = MultiExtractor()
+        bbox = BoundingBox.from_yolo(
+            x1=100, y1=200, x2=460, y2=320,
+            img_width=612, img_height=792,
+            page_width=612, page_height=792
+        )
+        table_areas = [bbox.to_tuple()]
 
         # When: extracting with all methods
-        results = extractor.extract_all_with_scores(simple_table_pdf, 1)
+        results = extractor.extract_all_with_scores(simple_table_pdf, 1, table_areas=table_areas)
 
         # Then: each result should have the required fields
         for result in results:

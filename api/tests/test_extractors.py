@@ -15,9 +15,12 @@ import pytest
 
 from api.scripts.extractors import (
     BaseExtractor,
+    BoundingBox,
     ExtractionResult,
     CamelotExtractor,
     PdfplumberExtractor,
+    PyMuPDFExtractor,
+    MultiExtractor,
     ExtractionScorer,
 )
 
@@ -184,6 +187,17 @@ def multipage_table_pdf():
 
     if os.path.exists(pdf_path):
         os.unlink(pdf_path)
+
+
+@pytest.fixture
+def multipage_table_areas():
+    """
+    Return table_areas for multipage_table_pdf in PDF coordinates (bottom-left origin).
+
+    Page 1: Table at (100, 200) in top-left, 200x50 pixels (2 cols × 2 rows).
+    PDF coords: (100, 542, 300, 592)
+    """
+    return [(100.0, 542.0, 300.0, 592.0)]
 
 
 @pytest.fixture
@@ -911,12 +925,12 @@ class TestMultipageExtraction:
         # Page 2 has only text - should find no tables
         assert len(page2_results) == 0, "Should find no tables on page 2"
 
-    def test_pdfplumber_extracts_tables_from_correct_pages(self, multipage_table_pdf):
+    def test_pdfplumber_extracts_tables_from_correct_pages(self, multipage_table_pdf, multipage_table_areas):
         """Pdfplumber should find tables on page 1 and no tables on page 2."""
         extractor = PdfplumberExtractor()
 
-        page1_results = extractor.extract(multipage_table_pdf, 1)
-        page2_results = extractor.extract(multipage_table_pdf, 2)
+        page1_results = extractor.extract(multipage_table_pdf, 1, table_areas=multipage_table_areas)
+        page2_results = extractor.extract(multipage_table_pdf, 2)  # No table_areas for page without tables
 
         # Page 1 has a bordered table - should find it
         assert len(page1_results) >= 1, "Should find at least one table on page 1"
@@ -955,3 +969,662 @@ class TestMultipageExtraction:
 
         assert camelot_results == [], "Camelot should return empty list for page without tables"
         assert pdfplumber_results == [], "Pdfplumber should return empty list for page without tables"
+
+
+# =============================================================================
+# BoundingBox Tests
+# =============================================================================
+
+class TestBoundingBoxInit:
+    """Tests for BoundingBox initialization and basic properties."""
+
+    def test_bounding_box_stores_coordinates(self):
+        # Given: coordinates for a bounding box
+        x1, y1, x2, y2 = 100.0, 200.0, 300.0, 400.0
+
+        # When: creating a BoundingBox
+        bbox = BoundingBox(x1=x1, y1=y1, x2=x2, y2=y2)
+
+        # Then: coordinates are stored correctly
+        assert bbox.x1 == 100.0
+        assert bbox.y1 == 200.0
+        assert bbox.x2 == 300.0
+        assert bbox.y2 == 400.0
+
+    def test_bounding_box_default_page_dimensions(self):
+        # Given: a BoundingBox without explicit page dimensions
+        bbox = BoundingBox(x1=0, y1=0, x2=100, y2=100)
+
+        # Then: default page dimensions are letter size
+        assert bbox.page_width == 612.0
+        assert bbox.page_height == 792.0
+
+    def test_bounding_box_custom_page_dimensions(self):
+        # Given: custom page dimensions (A4)
+        page_width, page_height = 595.0, 842.0
+
+        # When: creating a BoundingBox with custom dimensions
+        bbox = BoundingBox(x1=0, y1=0, x2=100, y2=100, page_width=page_width, page_height=page_height)
+
+        # Then: custom dimensions are stored
+        assert bbox.page_width == 595.0
+        assert bbox.page_height == 842.0
+
+
+class TestBoundingBoxFromYolo:
+    """Tests for BoundingBox.from_yolo() coordinate conversion."""
+
+    def test_from_yolo_converts_top_left_origin_to_bottom_left(self):
+        # Given: YOLO pixel coords with top-left origin (y=0 is TOP)
+        # Box at top-left quadrant of 612x792 image
+        x1_px, y1_px = 0, 0      # Top-left corner in pixels
+        x2_px, y2_px = 306, 396  # Center of image
+
+        # When: converting to PDF coords (bottom-left origin)
+        bbox = BoundingBox.from_yolo(
+            x1=x1_px, y1=y1_px, x2=x2_px, y2=y2_px,
+            img_width=612, img_height=792,
+            page_width=612, page_height=792
+        )
+
+        # Then: y values are flipped (PDF y=0 is BOTTOM)
+        # Original y1=0 (top of image) -> PDF y2=792 (top of page)
+        # Original y2=396 (middle) -> PDF y1=396 (middle)
+        assert bbox.x1 == pytest.approx(0.0, abs=0.1)
+        assert bbox.x2 == pytest.approx(306.0, abs=0.1)
+        assert bbox.y1 == pytest.approx(396.0, abs=0.1)  # Bottom of box in PDF
+        assert bbox.y2 == pytest.approx(792.0, abs=0.1)  # Top of box in PDF
+
+    def test_from_yolo_scales_to_page_dimensions(self):
+        # Given: YOLO coords from a smaller image scaled to larger page
+        img_width, img_height = 300, 400
+        page_width, page_height = 612, 792
+
+        # Box in center of image (normalized 0.25-0.75)
+        x1_px, y1_px = 75, 100   # 25% in
+        x2_px, y2_px = 225, 300  # 75% in
+
+        # When: converting with scaling
+        bbox = BoundingBox.from_yolo(
+            x1=x1_px, y1=y1_px, x2=x2_px, y2=y2_px,
+            img_width=img_width, img_height=img_height,
+            page_width=page_width, page_height=page_height
+        )
+
+        # Then: coordinates are scaled to page dimensions
+        # x: 75/300 = 0.25 -> 0.25 * 612 = 153
+        assert bbox.x1 == pytest.approx(153.0, abs=0.1)
+        # x: 225/300 = 0.75 -> 0.75 * 612 = 459
+        assert bbox.x2 == pytest.approx(459.0, abs=0.1)
+
+    def test_from_yolo_full_page_box(self):
+        # Given: YOLO box covering entire image
+        x1_px, y1_px = 0, 0
+        x2_px, y2_px = 612, 792
+
+        # When: converting full-page box
+        bbox = BoundingBox.from_yolo(
+            x1=x1_px, y1=y1_px, x2=x2_px, y2=y2_px,
+            img_width=612, img_height=792,
+            page_width=612, page_height=792
+        )
+
+        # Then: box covers entire page
+        assert bbox.x1 == pytest.approx(0.0, abs=0.1)
+        assert bbox.y1 == pytest.approx(0.0, abs=0.1)
+        assert bbox.x2 == pytest.approx(612.0, abs=0.1)
+        assert bbox.y2 == pytest.approx(792.0, abs=0.1)
+
+    def test_from_yolo_small_box_at_page_bottom(self):
+        # Given: small box at BOTTOM of image (high y values in image coords)
+        x1_px, y1_px = 100, 700  # Near bottom of image (y=700 out of 792)
+        x2_px, y2_px = 200, 750
+
+        # When: converting
+        bbox = BoundingBox.from_yolo(
+            x1=x1_px, y1=y1_px, x2=x2_px, y2=y2_px,
+            img_width=612, img_height=792,
+            page_width=612, page_height=792
+        )
+
+        # Then: box should be at BOTTOM of PDF page (low y values in PDF)
+        assert bbox.y1 < 100  # Near bottom of PDF page
+        assert bbox.y2 < 100  # Both y values low
+
+
+class TestBoundingBoxFromPdfCoords:
+    """Tests for BoundingBox.from_pdf_coords() normalization."""
+
+    def test_from_pdf_coords_normalizes_y_order(self):
+        # Given: PDF coords where y1 > y2 (inverted)
+        x1, y1, x2, y2 = 100, 500, 200, 300  # y1 > y2
+
+        # When: creating BoundingBox
+        bbox = BoundingBox.from_pdf_coords(x1, y1, x2, y2)
+
+        # Then: y values are normalized (y1 < y2)
+        assert bbox.y1 == 300  # Smaller value
+        assert bbox.y2 == 500  # Larger value
+
+    def test_from_pdf_coords_preserves_correct_order(self):
+        # Given: PDF coords already in correct order (y1 < y2)
+        x1, y1, x2, y2 = 100, 300, 200, 500
+
+        # When: creating BoundingBox
+        bbox = BoundingBox.from_pdf_coords(x1, y1, x2, y2)
+
+        # Then: values are preserved
+        assert bbox.y1 == 300
+        assert bbox.y2 == 500
+
+    def test_from_pdf_coords_preserves_x_values(self):
+        # Given: PDF coords
+        x1, y1, x2, y2 = 50, 100, 400, 600
+
+        # When: creating BoundingBox
+        bbox = BoundingBox.from_pdf_coords(x1, y1, x2, y2)
+
+        # Then: x values are unchanged
+        assert bbox.x1 == 50
+        assert bbox.x2 == 400
+
+
+class TestBoundingBoxToCamelot:
+    """Tests for BoundingBox.to_camelot() conversion."""
+
+    def test_to_camelot_swaps_y_values(self):
+        # Given: BoundingBox with y1 < y2 (standard PDF)
+        bbox = BoundingBox(x1=100, y1=200, x2=300, y2=400)
+
+        # When: converting to Camelot format
+        result = bbox.to_camelot()
+
+        # Then: Camelot expects y1 > y2, so y values are swapped
+        # Format: "x1,y1,x2,y2" where y1 is TOP (higher value)
+        assert result == "100,400,300,200"
+
+    def test_to_camelot_returns_string(self):
+        # Given: a BoundingBox
+        bbox = BoundingBox(x1=50, y1=100, x2=200, y2=300)
+
+        # When: converting to Camelot
+        result = bbox.to_camelot()
+
+        # Then: result is a comma-separated string
+        assert isinstance(result, str)
+        assert "," in result
+        parts = result.split(",")
+        assert len(parts) == 4
+
+
+class TestBoundingBoxToPdfplumber:
+    """Tests for BoundingBox.to_pdfplumber() conversion."""
+
+    def test_to_pdfplumber_converts_to_top_left_origin(self):
+        # Given: BoundingBox in PDF coords (bottom-left origin)
+        # Box from y=200 to y=400 on 792-height page
+        bbox = BoundingBox(x1=100, y1=200, x2=300, y2=400, page_height=792)
+
+        # When: converting to pdfplumber (top-left origin)
+        x0, top, x1, bottom = bbox.to_pdfplumber()
+
+        # Then: y values are flipped relative to page height
+        # PDF y2=400 (top of box) -> pdfplumber top = 792-400 = 392
+        # PDF y1=200 (bottom of box) -> pdfplumber bottom = 792-200 = 592
+        assert x0 == 100
+        assert x1 == 300
+        assert top == pytest.approx(392.0, abs=0.1)
+        assert bottom == pytest.approx(592.0, abs=0.1)
+
+    def test_to_pdfplumber_returns_tuple(self):
+        # Given: a BoundingBox
+        bbox = BoundingBox(x1=50, y1=100, x2=200, y2=300)
+
+        # When: converting to pdfplumber
+        result = bbox.to_pdfplumber()
+
+        # Then: result is a 4-tuple
+        assert isinstance(result, tuple)
+        assert len(result) == 4
+
+    def test_to_pdfplumber_top_less_than_bottom(self):
+        # Given: any valid BoundingBox
+        bbox = BoundingBox(x1=100, y1=200, x2=300, y2=400, page_height=792)
+
+        # When: converting
+        x0, top, x1, bottom = bbox.to_pdfplumber()
+
+        # Then: top < bottom (pdfplumber convention)
+        assert top < bottom
+
+
+class TestBoundingBoxToPymupdf:
+    """Tests for BoundingBox.to_pymupdf() conversion."""
+
+    def test_to_pymupdf_same_as_pdfplumber(self):
+        # Given: a BoundingBox
+        bbox = BoundingBox(x1=100, y1=200, x2=300, y2=400, page_height=792)
+
+        # When: converting to both formats
+        pdfplumber_result = bbox.to_pdfplumber()
+        pymupdf_result = bbox.to_pymupdf()
+
+        # Then: results are identical (both use top-left origin)
+        assert pdfplumber_result == pymupdf_result
+
+
+class TestBoundingBoxToTuple:
+    """Tests for BoundingBox.to_tuple() method."""
+
+    def test_to_tuple_returns_internal_coords(self):
+        # Given: a BoundingBox
+        bbox = BoundingBox(x1=100, y1=200, x2=300, y2=400)
+
+        # When: converting to tuple
+        result = bbox.to_tuple()
+
+        # Then: returns internal coordinates as tuple
+        assert result == (100, 200, 300, 400)
+
+    def test_to_tuple_maintains_y1_less_than_y2(self):
+        # Given: BoundingBox created via from_pdf_coords (normalized)
+        bbox = BoundingBox.from_pdf_coords(100, 500, 300, 200)  # y1 > y2
+
+        # When: converting to tuple
+        x1, y1, x2, y2 = bbox.to_tuple()
+
+        # Then: y1 < y2 (normalized)
+        assert y1 < y2
+
+
+class TestBoundingBoxRoundTrip:
+    """Tests for coordinate system round-trip conversions."""
+
+    def test_yolo_to_camelot_round_trip_preserves_region(self):
+        # Given: YOLO coords representing a table region
+        yolo_x1, yolo_y1 = 100, 100  # Top-left in image
+        yolo_x2, yolo_y2 = 300, 200  # Bottom-right in image
+
+        # When: converting YOLO -> PDF -> Camelot
+        bbox = BoundingBox.from_yolo(
+            x1=yolo_x1, y1=yolo_y1, x2=yolo_x2, y2=yolo_y2,
+            img_width=612, img_height=792,
+            page_width=612, page_height=792
+        )
+        camelot_str = bbox.to_camelot()
+
+        # Then: Camelot string represents same page region
+        parts = [float(p) for p in camelot_str.split(",")]
+        assert parts[0] == pytest.approx(yolo_x1, abs=1)  # x1 preserved
+        assert parts[2] == pytest.approx(yolo_x2, abs=1)  # x2 preserved
+
+
+# =============================================================================
+# PyMuPDFExtractor Tests
+# =============================================================================
+
+class TestPyMuPDFExtractorInit:
+    """Tests for PyMuPDFExtractor initialization."""
+
+    def test_default_strategy_is_lines(self):
+        # Given/When: creating extractor with defaults
+        extractor = PyMuPDFExtractor()
+
+        # Then: default strategy is 'lines'
+        assert extractor._strategy == 'lines'
+        assert extractor.name == 'pymupdf'
+
+    def test_text_strategy_accepted(self):
+        # Given/When: creating extractor with 'text' strategy
+        extractor = PyMuPDFExtractor(strategy='text')
+
+        # Then: strategy is set and name reflects it
+        assert extractor._strategy == 'text'
+        assert extractor.name == 'pymupdf_text'
+
+    def test_lines_strict_strategy_accepted(self):
+        # Given/When: creating extractor with 'lines_strict' strategy
+        extractor = PyMuPDFExtractor(strategy='lines_strict')
+
+        # Then: strategy is set and name reflects it
+        assert extractor._strategy == 'lines_strict'
+        assert extractor.name == 'pymupdf_strict'
+
+    def test_invalid_strategy_raises_error(self):
+        # Given: an invalid strategy name
+
+        # When/Then: ValueError is raised
+        with pytest.raises(ValueError, match="strategy must be"):
+            PyMuPDFExtractor(strategy='invalid')
+
+    def test_custom_tolerances_accepted(self):
+        # Given: custom tolerance values
+        snap_tol = 5
+        join_tol = 4
+
+        # When: creating extractor with custom values
+        extractor = PyMuPDFExtractor(snap_tolerance=snap_tol, join_tolerance=join_tol)
+
+        # Then: values are stored
+        assert extractor._snap_tolerance == 5
+        assert extractor._join_tolerance == 4
+
+    def test_custom_min_words_accepted(self):
+        # Given: custom minimum word settings
+        min_vert = 5
+        min_horiz = 2
+
+        # When: creating extractor with custom values
+        extractor = PyMuPDFExtractor(min_words_vertical=min_vert, min_words_horizontal=min_horiz)
+
+        # Then: values are stored
+        assert extractor._min_words_vertical == 5
+        assert extractor._min_words_horizontal == 2
+
+
+class TestPyMuPDFExtractorExtraction:
+    """Tests for PyMuPDFExtractor extract method."""
+
+    def test_extract_returns_list(self, simple_table_pdf):
+        # Given: a PyMuPDFExtractor and PDF with table
+        extractor = PyMuPDFExtractor()
+        table_areas = [(100.0, 500.0, 460.0, 700.0)]
+
+        # When: extracting
+        results = extractor.extract(simple_table_pdf, 1, table_areas=table_areas)
+
+        # Then: returns a list
+        assert isinstance(results, list)
+
+    def test_extract_results_are_extraction_results(self, simple_table_pdf):
+        # Given: a PyMuPDFExtractor
+        extractor = PyMuPDFExtractor()
+        table_areas = [(100.0, 500.0, 460.0, 700.0)]
+
+        # When: extracting
+        results = extractor.extract(simple_table_pdf, 1, table_areas=table_areas)
+
+        # Then: each result is an ExtractionResult
+        for result in results:
+            assert isinstance(result, ExtractionResult)
+
+    def test_extract_nonexistent_file_raises_error(self):
+        # Given: an extractor and non-existent file
+        extractor = PyMuPDFExtractor()
+
+        # When/Then: FileNotFoundError is raised
+        with pytest.raises(FileNotFoundError):
+            extractor.extract('/nonexistent/file.pdf', 1)
+
+    def test_extract_invalid_page_raises_error(self, simple_table_pdf):
+        # Given: an extractor and invalid page number
+        extractor = PyMuPDFExtractor()
+        table_areas = [(100.0, 500.0, 460.0, 700.0)]
+
+        # When/Then: ValueError is raised
+        with pytest.raises(ValueError, match="out of range"):
+            extractor.extract(simple_table_pdf, 999, table_areas=table_areas)
+
+    def test_extract_page_zero_raises_error(self, simple_table_pdf):
+        # Given: an extractor and page 0
+        extractor = PyMuPDFExtractor()
+        table_areas = [(100.0, 500.0, 460.0, 700.0)]
+
+        # When/Then: ValueError is raised (1-indexed)
+        with pytest.raises(ValueError, match="out of range"):
+            extractor.extract(simple_table_pdf, 0, table_areas=table_areas)
+
+    def test_extract_empty_pdf_returns_empty_list(self, empty_pdf):
+        # Given: a PDF without tables
+        extractor = PyMuPDFExtractor()
+        table_areas = [(100.0, 500.0, 460.0, 700.0)]
+
+        # When: extracting
+        results = extractor.extract(empty_pdf, 1, table_areas=table_areas)
+
+        # Then: returns empty list
+        assert results == []
+
+    def test_extract_without_table_areas_returns_empty(self, simple_table_pdf):
+        # Given: an extractor and no table_areas
+        extractor = PyMuPDFExtractor()
+
+        # When: extracting without table_areas
+        results = extractor.extract(simple_table_pdf, 1, table_areas=None)
+
+        # Then: returns empty list (pipeline requires table_areas)
+        assert results == []
+
+
+class TestPyMuPDFExtractorValidation:
+    """Tests for PyMuPDFExtractor validation methods."""
+
+    def test_valid_table_requires_minimum_dimensions(self):
+        # Given: an extractor
+        extractor = PyMuPDFExtractor()
+
+        # When/Then: 2x2 table is valid
+        valid_df = pd.DataFrame([['a', 'b'], ['c', 'd']])
+        assert extractor._is_valid_table(valid_df) is True
+
+        # When/Then: 1x2 table is invalid
+        invalid_df = pd.DataFrame([['a', 'b']])
+        assert extractor._is_valid_table(invalid_df) is False
+
+    def test_clean_dataframe_replaces_none(self):
+        # Given: an extractor and DataFrame with None values
+        extractor = PyMuPDFExtractor()
+        df = pd.DataFrame({'A': [1, None, 3], 'B': [None, 2, None]})
+
+        # When: cleaning
+        cleaned = extractor._clean_dataframe(df)
+
+        # Then: no NaN values remain
+        assert not cleaned.isna().any().any()
+
+    def test_has_numeric_content_detects_digits(self):
+        # Given: an extractor
+        extractor = PyMuPDFExtractor()
+
+        # When/Then: strings with digits detected
+        assert extractor._has_numeric_content('123') is True
+        assert extractor._has_numeric_content('$45.67') is True
+        assert extractor._has_numeric_content('no numbers') is False
+        assert extractor._has_numeric_content('') is False
+
+
+class TestPyMuPDFExtractorConfidence:
+    """Tests for PyMuPDFExtractor confidence calculation."""
+
+    def test_empty_dataframe_returns_zero_confidence(self):
+        # Given: an extractor and empty DataFrame
+        extractor = PyMuPDFExtractor()
+        df = pd.DataFrame()
+        mock_table = MagicMock()
+        mock_table.row_count = 0
+        mock_table.col_count = 0
+
+        # When: calculating confidence
+        confidence = extractor._calculate_confidence(df, mock_table)
+
+        # Then: confidence is 0
+        assert confidence == 0.0
+
+    def test_high_fill_rate_increases_confidence(self):
+        # Given: an extractor and full vs sparse DataFrames
+        extractor = PyMuPDFExtractor()
+
+        full_df = pd.DataFrame({'A': ['1', '2', '3'], 'B': ['4', '5', '6']})
+        sparse_df = pd.DataFrame({'A': ['1', '', ''], 'B': ['', '', '']})
+
+        mock_table = MagicMock()
+        mock_table.row_count = 3
+        mock_table.col_count = 2
+
+        # When: calculating confidence
+        full_conf = extractor._calculate_confidence(full_df, mock_table)
+        sparse_conf = extractor._calculate_confidence(sparse_df, mock_table)
+
+        # Then: full table has higher confidence
+        assert full_conf > sparse_conf
+
+
+class TestPyMuPDFExtractorMetadata:
+    """Tests for PyMuPDFExtractor metadata building."""
+
+    def test_metadata_includes_required_fields(self):
+        # Given: an extractor
+        extractor = PyMuPDFExtractor(strategy='text')
+
+        # Create a mock table
+        mock_table = MagicMock()
+        mock_table.row_count = 3
+        mock_table.col_count = 2
+        mock_table.header = None
+
+        # When: building metadata
+        metadata = extractor._build_metadata(
+            mock_table,
+            table_index=0,
+            page_num=1,
+            original_bbox=(100, 200, 300, 400)
+        )
+
+        # Then: metadata contains required fields
+        assert metadata['table_index'] == 0
+        assert metadata['page_num'] == 1
+        assert metadata['bounding_box'] == {'x1': 100, 'y1': 200, 'x2': 300, 'y2': 400}
+        assert metadata['extractor_settings']['strategy'] == 'text'
+        assert metadata['table_dimensions'] == {'rows': 3, 'cols': 2}
+
+
+# =============================================================================
+# MultiExtractor enabled_libraries Tests
+# =============================================================================
+
+class TestMultiExtractorEnabledLibraries:
+    """Tests for MultiExtractor enabled_libraries feature."""
+
+    def test_default_enables_all_libraries(self):
+        # Given/When: creating MultiExtractor with defaults
+        extractor = MultiExtractor()
+
+        # Then: all libraries are enabled
+        names = extractor.extractor_names
+        assert 'camelot_lattice' in names
+        assert 'camelot_stream' in names
+        assert 'pdfplumber' in names
+        assert 'pdfplumber_text' in names
+        assert 'pymupdf' in names
+        assert 'pymupdf_text' in names
+        assert 'img2table' in names
+
+    def test_disabling_camelot_removes_camelot_extractors(self):
+        # Given: enabled_libraries with camelot disabled
+        enabled = {'camelot': False, 'pdfplumber': True, 'pymupdf': True, 'vision': True}
+
+        # When: creating MultiExtractor
+        extractor = MultiExtractor(enabled_libraries=enabled)
+
+        # Then: no Camelot extractors present
+        names = extractor.extractor_names
+        assert 'camelot_lattice' not in names
+        assert 'camelot_stream' not in names
+        # Others still present
+        assert 'pdfplumber' in names
+        assert 'pymupdf' in names
+
+    def test_disabling_pdfplumber_removes_pdfplumber_extractors(self):
+        # Given: enabled_libraries with pdfplumber disabled
+        enabled = {'camelot': True, 'pdfplumber': False, 'pymupdf': True, 'vision': True}
+
+        # When: creating MultiExtractor
+        extractor = MultiExtractor(enabled_libraries=enabled)
+
+        # Then: no pdfplumber extractors present
+        names = extractor.extractor_names
+        assert 'pdfplumber' not in names
+        assert 'pdfplumber_text' not in names
+        # Others still present
+        assert 'camelot_lattice' in names
+        assert 'pymupdf' in names
+
+    def test_disabling_pymupdf_removes_pymupdf_extractors(self):
+        # Given: enabled_libraries with pymupdf disabled
+        enabled = {'camelot': True, 'pdfplumber': True, 'pymupdf': False, 'vision': True}
+
+        # When: creating MultiExtractor
+        extractor = MultiExtractor(enabled_libraries=enabled)
+
+        # Then: no PyMuPDF extractors present
+        names = extractor.extractor_names
+        assert 'pymupdf' not in names
+        assert 'pymupdf_text' not in names
+        # Others still present
+        assert 'camelot_lattice' in names
+        assert 'pdfplumber' in names
+
+    def test_disabling_vision_removes_img2table_extractor(self):
+        # Given: enabled_libraries with vision disabled
+        enabled = {'camelot': True, 'pdfplumber': True, 'pymupdf': True, 'vision': False}
+
+        # When: creating MultiExtractor
+        extractor = MultiExtractor(enabled_libraries=enabled)
+
+        # Then: no vision extractor present
+        names = extractor.extractor_names
+        assert 'img2table' not in names
+        # Others still present
+        assert 'camelot_lattice' in names
+        assert 'pdfplumber' in names
+        assert 'pymupdf' in names
+
+    def test_enabling_only_one_library(self):
+        # Given: only pdfplumber enabled
+        enabled = {'camelot': False, 'pdfplumber': True, 'pymupdf': False, 'vision': False}
+
+        # When: creating MultiExtractor
+        extractor = MultiExtractor(enabled_libraries=enabled)
+
+        # Then: only pdfplumber extractors present
+        names = extractor.extractor_names
+        assert names == ['pdfplumber', 'pdfplumber_text']
+
+    def test_empty_dict_enables_all_libraries(self):
+        # Given: empty enabled_libraries dict
+        enabled = {}
+
+        # When: creating MultiExtractor
+        extractor = MultiExtractor(enabled_libraries=enabled)
+
+        # Then: all libraries enabled (defaults to True)
+        names = extractor.extractor_names
+        assert 'camelot_lattice' in names
+        assert 'pdfplumber' in names
+        assert 'pymupdf' in names
+        assert 'img2table' in names
+
+    def test_partial_dict_enables_unspecified_libraries(self):
+        # Given: only some libraries specified (others default to True)
+        enabled = {'camelot': False}
+
+        # When: creating MultiExtractor
+        extractor = MultiExtractor(enabled_libraries=enabled)
+
+        # Then: unspecified libraries are enabled
+        names = extractor.extractor_names
+        assert 'camelot_lattice' not in names  # Explicitly disabled
+        assert 'pdfplumber' in names           # Defaults to True
+        assert 'pymupdf' in names              # Defaults to True
+        assert 'img2table' in names            # Defaults to True
+
+    def test_extractor_count_matches_enabled_libraries(self):
+        # Given: specific configuration
+        enabled = {'camelot': True, 'pdfplumber': False, 'pymupdf': True, 'vision': False}
+
+        # When: creating MultiExtractor
+        extractor = MultiExtractor(enabled_libraries=enabled)
+
+        # Then: correct number of extractors
+        # Camelot: 2 (lattice + stream), PyMuPDF: 2 (lines + text) = 4 total
+        assert len(extractor._extractors) == 4
