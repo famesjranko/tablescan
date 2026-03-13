@@ -151,48 +151,59 @@
                 <div x-show="showAdvanced" x-cloak class="mt-4 space-y-4">
                     <!-- Extraction Libraries -->
                     <div class="mb-4">
-                        <label class="block text-sm font-medium text-gray-700 mb-2">Extraction Libraries</label>
+                        <div class="flex items-center justify-between mb-2">
+                            <label class="block text-sm font-medium text-gray-700">Extraction Libraries</label>
+                            <button type="button" @click="toggleAllLibraries()" class="text-xs text-primary hover:text-blue-700 font-medium">
+                                <span x-text="allLibrariesSelected ? 'Deselect All' : 'Select All'"></span>
+                            </button>
+                        </div>
                         <p class="text-xs text-gray-500 mb-2">Select which extraction methods to run. More libraries = better results but slower.</p>
 
-                        <label class="flex items-center mb-2">
-                            <input type="checkbox" x-model="useCamelot" class="h-4 w-4 text-primary focus:ring-primary border-gray-300 rounded">
-                            <span class="ml-2 text-sm">Camelot</span>
-                            <span class="ml-1 text-xs text-gray-400">- bordered & borderless tables</span>
-                        </label>
+                        <div class="space-y-2">
+                            <label class="relative flex items-center p-2 border rounded-md cursor-pointer transition-colors"
+                                   :class="useCamelot ? 'border-primary bg-blue-50' : 'border-gray-200 hover:border-gray-300'">
+                                <input type="checkbox" x-model="useCamelot"
+                                       class="h-4 w-4 text-primary focus:ring-primary border-gray-300 rounded">
+                                <span class="ml-2.5 text-sm font-medium text-gray-900">Camelot</span>
+                                <span class="ml-1.5 text-xs text-gray-500">- bordered & borderless tables</span>
+                            </label>
 
-                        <label class="flex items-center mb-2">
-                            <input type="checkbox" x-model="usePdfplumber" class="h-4 w-4 text-primary focus:ring-primary border-gray-300 rounded">
-                            <span class="ml-2 text-sm">pdfplumber</span>
-                            <span class="ml-1 text-xs text-gray-400">- alternative text extraction</span>
-                        </label>
+                            <label class="relative flex items-center p-2 border rounded-md cursor-pointer transition-colors"
+                                   :class="usePdfplumber ? 'border-primary bg-blue-50' : 'border-gray-200 hover:border-gray-300'">
+                                <input type="checkbox" x-model="usePdfplumber"
+                                       class="h-4 w-4 text-primary focus:ring-primary border-gray-300 rounded">
+                                <span class="ml-2.5 text-sm font-medium text-gray-900">pdfplumber</span>
+                                <span class="ml-1.5 text-xs text-gray-500">- alternative text extraction</span>
+                            </label>
 
-                        <label class="flex items-center mb-2">
-                            <input type="checkbox" x-model="usePymupdf" class="h-4 w-4 text-primary focus:ring-primary border-gray-300 rounded">
-                            <span class="ml-2 text-sm">PyMuPDF</span>
-                            <span class="ml-1 text-xs text-gray-400">- fast, lightweight</span>
-                        </label>
+                            <label class="relative flex items-center p-2 border rounded-md cursor-pointer transition-colors"
+                                   :class="usePymupdf ? 'border-primary bg-blue-50' : 'border-gray-200 hover:border-gray-300'">
+                                <input type="checkbox" x-model="usePymupdf"
+                                       class="h-4 w-4 text-primary focus:ring-primary border-gray-300 rounded">
+                                <span class="ml-2.5 text-sm font-medium text-gray-900">PyMuPDF</span>
+                                <span class="ml-1.5 text-xs text-gray-500">- fast, lightweight</span>
+                            </label>
 
-                        <label class="flex items-center mb-2">
-                            <input type="checkbox" x-model="useVision" class="h-4 w-4 text-primary focus:ring-primary border-gray-300 rounded">
-                            <span class="ml-2 text-sm">Vision/OCR</span>
-                            <span class="ml-1 text-xs text-gray-400">- slower, best for scanned documents</span>
-                        </label>
+                            <label class="relative flex items-center p-2 border rounded-md cursor-pointer transition-colors"
+                                   :class="useVision ? 'border-primary bg-blue-50' : 'border-gray-200 hover:border-gray-300'">
+                                <input type="checkbox" x-model="useVision"
+                                       class="h-4 w-4 text-primary focus:ring-primary border-gray-300 rounded">
+                                <span class="ml-2.5 text-sm font-medium text-gray-900">Vision/OCR</span>
+                                <span class="ml-1.5 text-xs text-gray-500">- slower, best for scanned documents</span>
+                            </label>
+                        </div>
                     </div>
 
                     <!-- Header Merging -->
-                    <div class="flex items-center">
-                        <input
-                            type="checkbox"
-                            name="merge_headers"
-                            id="merge_headers"
-                            x-model="mergeHeaders"
-                            class="h-4 w-4 text-primary focus:ring-primary border-gray-300 rounded"
-                        >
-                        <label for="merge_headers" class="ml-2 block text-sm text-gray-700">
-                            Auto-merge multi-row headers
+                    <div class="pt-3 border-t border-gray-200">
+                        <label class="relative flex items-center p-2 border rounded-md cursor-pointer transition-colors"
+                               :class="mergeHeaders ? 'border-primary bg-blue-50' : 'border-gray-200 hover:border-gray-300'">
+                            <input type="checkbox" x-model="mergeHeaders"
+                                   class="h-4 w-4 text-primary focus:ring-primary border-gray-300 rounded">
+                            <span class="ml-2.5 text-sm font-medium text-gray-900">Auto-merge multi-row headers</span>
+                            <span class="ml-1.5 text-xs text-gray-500">- combines fragmented rows</span>
                         </label>
                     </div>
-                    <p class="text-xs text-gray-500 -mt-2 ml-6">Combines fragmented header rows into a single header</p>
                 </div>
             </div>
 
@@ -293,6 +304,18 @@ function uploadForm() {
         usePdfplumber: true,
         usePymupdf: true,
         useVision: true,
+
+        get allLibrariesSelected() {
+            return this.useCamelot && this.usePdfplumber && this.usePymupdf && this.useVision;
+        },
+
+        toggleAllLibraries() {
+            const newVal = !this.allLibrariesSelected;
+            this.useCamelot = newVal;
+            this.usePdfplumber = newVal;
+            this.usePymupdf = newVal;
+            this.useVision = newVal;
+        },
 
         handleFileSelect(event) {
             const file = event.target.files[0];
