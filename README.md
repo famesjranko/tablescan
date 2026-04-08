@@ -12,6 +12,11 @@ Automated PDF table extraction with AI-powered detection. Upload PDFs, review de
 - **Async Processing** - Celery handles extraction in the background
 - **Multiple Exports** - CSV, JSON, or ZIP archive
 
+## Screenshots
+
+![Main page](./docs/imgs/main-page.png)
+![Bookview page](./docs/imgs/bookview-page.png)
+
 ## Quick Start
 
 ```bash
