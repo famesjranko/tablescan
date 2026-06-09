@@ -135,11 +135,21 @@ def test_clean_dataframe_replaces_none():
     cleaned = DoclingExtractor()._clean_dataframe(pd.DataFrame({'A': [1, None], 'B': [None, 2]}))
     assert not cleaned.isna().any().any()
 
-def test_clean_dataframe_flattens_multiindex_columns():
+def test_clean_dataframe_pushes_multiindex_header_to_row0():
     cols = pd.MultiIndex.from_tuples([('Group', 'a'), ('Group', 'b')])
     cleaned = DoclingExtractor()._clean_dataframe(pd.DataFrame([[1, 2], [3, 4]], columns=cols))
     assert not isinstance(cleaned.columns, pd.MultiIndex)
-    assert list(cleaned.columns) == ['Group a', 'Group b']
+    assert list(cleaned.columns) == [0, 1]
+    assert list(cleaned.iloc[0]) == ['Group a', 'Group b']
+
+def test_duplicate_spanning_headers_do_not_crash_scoring():
+    # Duplicate collapsed labels must not crash scoring (regression: silent drop)
+    ext = DoclingExtractor()
+    cols = pd.MultiIndex.from_tuples([('Amount', ''), ('Amount', ''), ('Year', '2023')])
+    cleaned = ext._clean_dataframe(pd.DataFrame([['10', '20', '2023'], ['30', '40', '2024']], columns=cols))
+    assert list(cleaned.iloc[0]) == ['Amount', 'Amount', 'Year 2023']
+    conf = ext._calculate_confidence(cleaned)
+    assert isinstance(conf, float) and 0.0 <= conf <= 1.0
 
 def test_has_numeric_content():
     ext = DoclingExtractor()

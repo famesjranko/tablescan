@@ -426,12 +426,17 @@ class DoclingExtractor(BaseExtractor):
         """
         df = df.copy()
 
-        # Docling can emit MultiIndex columns for tables with spanning/multi-row
-        # headers. Flatten them to single string labels so the result matches
-        # the other backends and round-trips cleanly through the variants cache
-        # (which serializes via DataFrame.to_json(orient='split')).
+        # Docling emits the header in df.columns as a MultiIndex for tables with
+        # spanning / multi-row headers. The rest of the pipeline (scorer, XLSX
+        # export, the other text backends) expects the header as data row 0 with
+        # a positional RangeIndex - which is exactly how Docling returns SIMPLE
+        # tables. Normalize the spanning-header case to match: collapse each
+        # column's levels to one label and push it down as the first data row.
+        # This also avoids duplicate column labels (two spans can collapse to the
+        # same string), which would otherwise corrupt the variants-cache JSON
+        # round-trip and make per-column scoring raise on df[col] -> DataFrame.
         if isinstance(df.columns, pd.MultiIndex):
-            df.columns = [
+            header_row = [
                 ' '.join(
                     str(level).strip()
                     for level in col
@@ -439,6 +444,7 @@ class DoclingExtractor(BaseExtractor):
                 ).strip()
                 for col in df.columns
             ]
+            df = pd.DataFrame([header_row] + df.values.tolist())
 
         df = df.fillna('')
         df = df.map(lambda x: str(x).strip() if x is not None else '')
@@ -477,10 +483,12 @@ class DoclingExtractor(BaseExtractor):
         # Factor 2: Structure regularity (Docling tables are always rectangular)
         regularity = 1.0
 
-        # Factor 3: Numeric content presence
+        # Factor 3: Numeric content presence.
+        # Iterate positionally so duplicate column labels can never turn
+        # df[col] into a DataFrame (which would make the arithmetic below raise).
         numeric_count = 0
-        for col in df.columns:
-            numeric_count += df[col].apply(self._has_numeric_content).sum()
+        for i in range(df.shape[1]):
+            numeric_count += df.iloc[:, i].apply(self._has_numeric_content).sum()
         numeric_ratio = numeric_count / total_cells if total_cells > 0 else 0.0
 
         # Factor 4: Size bonus (larger tables more likely to be real)

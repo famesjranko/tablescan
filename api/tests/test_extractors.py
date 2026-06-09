@@ -1835,7 +1835,7 @@ class TestDoclingExtractorValidation:
 
         assert not cleaned.isna().any().any()
 
-    def test_clean_dataframe_flattens_multiindex_columns(self):
+    def test_clean_dataframe_pushes_multiindex_header_to_row0(self):
         # Given: a DataFrame with spanning (MultiIndex) headers like Docling
         # produces for complex tables
         extractor = DoclingExtractor()
@@ -1845,10 +1845,31 @@ class TestDoclingExtractorValidation:
         # When: cleaning
         cleaned = extractor._clean_dataframe(df)
 
-        # Then: columns are flattened to single string labels (round-trips
-        # through the variants cache's to_json/read_json)
+        # Then: no MultiIndex; the collapsed header becomes data row 0 with a
+        # positional RangeIndex (matching Docling's simple-table shape and the
+        # other text backends, so XLSX export / scorer header detection work)
         assert not isinstance(cleaned.columns, pd.MultiIndex)
-        assert list(cleaned.columns) == ['Group a', 'Group b']
+        assert list(cleaned.columns) == [0, 1]
+        assert list(cleaned.iloc[0]) == ['Group a', 'Group b']
+        assert list(cleaned.iloc[1]) == ['1', '2']
+
+    def test_duplicate_spanning_headers_do_not_crash_scoring(self):
+        # Regression: spanning headers can collapse to duplicate labels. With
+        # duplicate column labels, df[col] returns a DataFrame and confidence
+        # scoring used to raise -> _process_table swallowed it -> the table was
+        # silently dropped. The header must instead land in row 0 (dupes allowed
+        # as plain cells) and scoring must not crash.
+        extractor = DoclingExtractor()
+        cols = pd.MultiIndex.from_tuples([('Amount', ''), ('Amount', ''), ('Year', '2023')])
+        df = pd.DataFrame([['10', '20', '2023'], ['30', '40', '2024']], columns=cols)
+
+        cleaned = extractor._clean_dataframe(df)
+        assert list(cleaned.iloc[0]) == ['Amount', 'Amount', 'Year 2023']
+
+        # Confidence scoring runs without raising and returns a valid score
+        confidence = extractor._calculate_confidence(cleaned)
+        assert isinstance(confidence, float)
+        assert 0.0 <= confidence <= 1.0
 
     def test_has_numeric_content_detects_digits(self):
         extractor = DoclingExtractor()
