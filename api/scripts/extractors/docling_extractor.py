@@ -79,19 +79,11 @@ def _build_converter(table_mode: str, do_ocr: bool, artifacts_path: Optional[str
         TableFormerMode.ACCURATE if table_mode == 'accurate' else TableFormerMode.FAST
     )
 
-    # Configure both PDF and image inputs with the same options so the
-    # converter works regardless of how a region is cropped.
+    # Regions are always cropped to a single-page PDF (see _extract_from_region),
+    # so only the PDF pipeline is configured.
     format_options = {
         InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options),
     }
-    try:
-        format_options[InputFormat.IMAGE] = PdfFormatOption(
-            pipeline_options=pipeline_options
-        )
-    except Exception:
-        # Older docling builds may not accept IMAGE here; PDF cropping is the
-        # primary path, so this is non-fatal.
-        pass
 
     logger.info(
         "[docling] Building DocumentConverter "
