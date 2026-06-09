@@ -4,7 +4,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('api', '0011_add_enabled_libraries_to_report'),
+        ('api', '0012_add_enabled_libraries_to_report'),
     ]
 
     operations = [
