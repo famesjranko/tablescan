@@ -42,12 +42,31 @@ def _serialize_variants_for_cache(variants: list) -> str:
 
 
 def _deserialize_variants_from_cache(data: str) -> list:
-    """Deserialize extraction variants from cache."""
-    from io import StringIO
+    """Deserialize extraction variants from cache.
+
+    DataFrames are rebuilt directly from the ``orient='split'`` components
+    (columns/index/data) with ``dtype=str`` rather than via ``pd.read_json``.
+    ``read_json``'s type inference silently corrupts the round-trip in two ways
+    (see issue #16):
+
+    - Identifier-like cells lose their exact form ('001' -> 1, '1.50' -> 1.5).
+    - Duplicate column labels get a ``.1`` suffix ('Total','Total' ->
+      'Total','Total.1').
+
+    Each extractor's ``_clean_dataframe`` stringifies cells before they are
+    cached, so forcing ``str`` on the way back reproduces exactly what was
+    extracted instead of re-introducing numeric types.
+    """
     variants = json.loads(data)
     for v in variants:
         if 'dataframe_json' in v:
-            v['dataframe'] = pd.read_json(StringIO(v['dataframe_json']), orient='split')
+            split = json.loads(v['dataframe_json'])
+            v['dataframe'] = pd.DataFrame(
+                data=split['data'],
+                index=split['index'],
+                columns=split['columns'],
+                dtype=str,
+            )
             del v['dataframe_json']
         else:
             v['dataframe'] = None
