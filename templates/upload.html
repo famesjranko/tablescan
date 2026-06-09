@@ -191,6 +191,15 @@
                                 <span class="ml-2.5 text-sm font-medium text-gray-900">Vision/OCR</span>
                                 <span class="ml-1.5 text-xs text-gray-500">- slower, best for scanned documents</span>
                             </label>
+
+                            <label class="relative flex items-center p-2 border rounded-md cursor-pointer transition-colors"
+                                   :class="useDocling ? 'border-primary bg-blue-50' : 'border-gray-200 hover:border-gray-300'">
+                                <input type="checkbox" x-model="useDocling"
+                                       class="h-4 w-4 text-primary focus:ring-primary border-gray-300 rounded">
+                                <span class="ml-2.5 text-sm font-medium text-gray-900">Docling</span>
+                                <span class="ml-1.5 text-xs text-gray-500">- IBM AI model, highest accuracy on complex tables, slowest</span>
+                                <span class="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-purple-100 text-purple-700">experimental</span>
+                            </label>
                         </div>
                     </div>
 
@@ -304,6 +313,7 @@ function uploadForm() {
         usePdfplumber: true,
         usePymupdf: true,
         useVision: true,
+        useDocling: false,
 
         get allLibrariesSelected() {
             return this.useCamelot && this.usePdfplumber && this.usePymupdf && this.useVision;
@@ -368,6 +378,7 @@ function uploadForm() {
             formData.append('use_pdfplumber', this.usePdfplumber ? 'on' : 'off');
             formData.append('use_pymupdf', this.usePymupdf ? 'on' : 'off');
             formData.append('use_vision', this.useVision ? 'on' : 'off');
+            formData.append('use_docling', this.useDocling ? 'on' : 'off');
 
             try {
                 const response = await fetch('{% url "upload_async" %}', {

@@ -408,7 +408,10 @@ class TestVariantsCacheSerialization:
         # Then: exact string values are preserved (no numeric coercion)
         assert back['code'].tolist() == ['001', '002', '030']
         assert back['price'].tolist() == ['1.50', '2.00', '10.00']
-        assert all(str(dt) == 'object' for dt in back.dtypes)
+        # Stored as a string dtype, not numerically coerced. The exact dtype
+        # name varies by pandas version (object on 2.x, str on 3.x), so accept
+        # any string-like dtype.
+        assert all(str(dt) in ('object', 'str', 'string') for dt in back.dtypes)
 
     def test_round_trip_preserves_duplicate_columns(self):
         """Regression for issue #16: duplicate column labels must not be renamed

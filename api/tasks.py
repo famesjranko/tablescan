@@ -87,12 +87,12 @@ def extract_tables_task(self, report_id, file_path, start_page, end_page,
         file_path: Path to PDF file
         start_page: Starting page number
         end_page: Ending page number (-1 for all)
-        enabled_libraries: Dict of library toggles (camelot, pdfplumber, pymupdf, vision)
+        enabled_libraries: Dict of library toggles (camelot, pdfplumber, pymupdf, vision, docling)
         strip_text: Characters to strip from cell text
         merge_headers: Whether to merge fragmented multi-row headers
     """
     if enabled_libraries is None:
-        enabled_libraries = {'camelot': True, 'pdfplumber': True, 'pymupdf': True, 'vision': True}
+        enabled_libraries = {'camelot': True, 'pdfplumber': True, 'pymupdf': True, 'vision': True, 'docling': False}
     log = Logging()
 
     # Update state to show we've started
@@ -425,8 +425,10 @@ def extract_from_selections(self, report_id):
         for sel in approved_selections:
             selection_ids_by_page[sel.page_num].append(sel.id)
 
-        # Initialize multi-extractor for running all methods
-        multi_extractor = MultiExtractor()
+        # Initialize multi-extractor for running all methods, honoring the
+        # per-report library toggles captured at upload time (falls back to
+        # defaults for older reports where none were stored).
+        multi_extractor = MultiExtractor(enabled_libraries=report.enabled_libraries or None)
         cache_ttl = getattr(settings, 'EXTRACTION_VARIANTS_CACHE_TTL', 600)
 
         # Process each selection individually (not grouped by page)
@@ -447,6 +449,7 @@ def extract_from_selections(self, report_id):
                 'pymupdf': 'Processing document layers',
                 'pymupdf_text': 'Reading text alignment',
                 'img2table': 'Running visual recognition',
+                'docling': 'Running Docling AI model',
             }
 
             def make_progress_callback(sel_idx, sel_total):

@@ -15,6 +15,7 @@ from .camelot_extractor import CamelotExtractor
 from .pdfplumber_extractor import PdfplumberExtractor
 from .pymupdf_extractor import PyMuPDFExtractor
 from .vision_extractor import VisionExtractor
+from .docling_extractor import DoclingExtractor
 from .scorer import ExtractionScorer
 
 
@@ -44,10 +45,12 @@ class MultiExtractor:
                 - 'pdfplumber': Enable pdfplumber lines + text extractors
                 - 'pymupdf': Enable PyMuPDF lines + text extractors
                 - 'vision': Enable img2table vision extractor
-                All default to True if not specified.
+                - 'docling': Enable Docling (IBM) extractor (opt-in, default off)
+                camelot/pdfplumber/pymupdf/vision default to True if not
+                specified; docling defaults to False (opt-in).
         """
         if enabled_libraries is None:
-            enabled_libraries = {'camelot': True, 'pdfplumber': True, 'pymupdf': True, 'vision': True}
+            enabled_libraries = {'camelot': True, 'pdfplumber': True, 'pymupdf': True, 'vision': True, 'docling': False}
 
         self._scorer = ExtractionScorer()
         self._extractors = []
@@ -82,6 +85,11 @@ class MultiExtractor:
         # - img2table: Vision-based extraction
         if enabled_libraries.get('vision', True):
             self._extractors.append(VisionExtractor())
+
+        # - docling: IBM Docling + TableFormer (opt-in, high accuracy, heavier)
+        #   Defaults to False so it is only run when explicitly requested.
+        if enabled_libraries.get('docling', False):
+            self._extractors.append(DoclingExtractor())
 
         logger.info(f"[MultiExtractor] enabled_libraries={enabled_libraries}, extractors={self.extractor_names}")
 

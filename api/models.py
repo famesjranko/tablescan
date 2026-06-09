@@ -90,6 +90,11 @@ class Report(models.Model):
         default="uploaded",
         help_text="Current processing state of the report",
     )
+    enabled_libraries = models.JSONField(
+        null=True,
+        blank=True,
+        help_text="Per-report extraction library toggles (camelot, pdfplumber, pymupdf, vision, docling); null means defaults",
+    )
     owner = models.ForeignKey(
         User,
         on_delete=models.CASCADE,

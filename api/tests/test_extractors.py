@@ -20,6 +20,7 @@ from api.scripts.extractors import (
     CamelotExtractor,
     PdfplumberExtractor,
     PyMuPDFExtractor,
+    DoclingExtractor,
     MultiExtractor,
     ExtractionScorer,
 )
@@ -1628,3 +1629,328 @@ class TestMultiExtractorEnabledLibraries:
         # Then: correct number of extractors
         # Camelot: 2 (lattice + stream), PyMuPDF: 2 (lines + text) = 4 total
         assert len(extractor._extractors) == 4
+
+
+# =============================================================================
+# MultiExtractor docling toggle Tests
+# =============================================================================
+
+class TestMultiExtractorDoclingToggle:
+    """Tests for the opt-in Docling backend in MultiExtractor."""
+
+    def test_docling_disabled_by_default(self):
+        # Given/When: creating MultiExtractor with defaults
+        extractor = MultiExtractor()
+
+        # Then: docling is NOT enabled (opt-in only)
+        assert 'docling' not in extractor.extractor_names
+
+    def test_empty_dict_does_not_enable_docling(self):
+        # Given: empty enabled_libraries dict
+        # When: creating MultiExtractor
+        extractor = MultiExtractor(enabled_libraries={})
+
+        # Then: docling stays off (defaults to False, unlike the others)
+        assert 'docling' not in extractor.extractor_names
+
+    def test_enabling_docling_adds_extractor(self):
+        # Given: enabled_libraries with docling explicitly enabled
+        enabled = {'camelot': False, 'pdfplumber': False, 'pymupdf': False,
+                   'vision': False, 'docling': True}
+
+        # When: creating MultiExtractor
+        extractor = MultiExtractor(enabled_libraries=enabled)
+
+        # Then: only the docling extractor is present
+        assert extractor.extractor_names == ['docling']
+
+    def test_docling_alongside_classic_backends(self):
+        # Given: docling enabled together with pdfplumber
+        enabled = {'camelot': False, 'pdfplumber': True, 'pymupdf': False,
+                   'vision': False, 'docling': True}
+
+        # When: creating MultiExtractor
+        extractor = MultiExtractor(enabled_libraries=enabled)
+
+        # Then: both backends present
+        names = extractor.extractor_names
+        assert 'docling' in names
+        assert 'pdfplumber' in names
+
+    def test_disabling_docling_removes_extractor(self):
+        # Given: docling explicitly disabled
+        enabled = {'docling': False}
+
+        # When: creating MultiExtractor
+        extractor = MultiExtractor(enabled_libraries=enabled)
+
+        # Then: docling absent (others still default on)
+        names = extractor.extractor_names
+        assert 'docling' not in names
+        assert 'camelot_lattice' in names
+
+
+# =============================================================================
+# DoclingExtractor Tests
+# =============================================================================
+
+class TestDoclingExtractorInit:
+    """Tests for DoclingExtractor initialization (no docling import needed)."""
+
+    def test_name_is_docling(self):
+        extractor = DoclingExtractor()
+        assert extractor.name == 'docling'
+
+    def test_default_table_mode_is_accurate(self):
+        extractor = DoclingExtractor()
+        assert extractor._table_mode == 'accurate'
+
+    def test_fast_table_mode_accepted(self):
+        extractor = DoclingExtractor(table_mode='fast')
+        assert extractor._table_mode == 'fast'
+
+    def test_invalid_table_mode_raises_error(self):
+        with pytest.raises(ValueError, match="table_mode"):
+            DoclingExtractor(table_mode='invalid')
+
+    def test_do_ocr_defaults_false(self):
+        extractor = DoclingExtractor()
+        assert extractor._do_ocr is False
+
+    def test_artifacts_path_read_from_env(self, monkeypatch):
+        # Given: DOCLING_ARTIFACTS_PATH set in the environment
+        monkeypatch.setenv('DOCLING_ARTIFACTS_PATH', '/opt/docling-models')
+
+        # When: creating an extractor without an explicit path
+        extractor = DoclingExtractor()
+
+        # Then: it picks up the env var
+        assert extractor._artifacts_path == '/opt/docling-models'
+
+    def test_explicit_artifacts_path_overrides_env(self, monkeypatch):
+        # Given: env var set AND an explicit path provided
+        monkeypatch.setenv('DOCLING_ARTIFACTS_PATH', '/opt/docling-models')
+
+        # When: creating an extractor with an explicit path
+        extractor = DoclingExtractor(artifacts_path='/custom/path')
+
+        # Then: the explicit path wins
+        assert extractor._artifacts_path == '/custom/path'
+
+    def test_artifacts_path_none_when_unset(self, monkeypatch):
+        # Given: no env var and no explicit path
+        monkeypatch.delenv('DOCLING_ARTIFACTS_PATH', raising=False)
+
+        # When: creating an extractor
+        extractor = DoclingExtractor()
+
+        # Then: artifacts_path is None (Docling resolves models itself)
+        assert extractor._artifacts_path is None
+
+    def test_implements_base_interface(self):
+        extractor = DoclingExtractor()
+        assert isinstance(extractor, BaseExtractor)
+
+
+class TestDoclingExtractorExtraction:
+    """Tests for DoclingExtractor.extract control flow.
+
+    These cover paths that run before docling is imported, so they execute
+    even when docling is not installed.
+    """
+
+    def test_extract_nonexistent_file_raises_error(self):
+        extractor = DoclingExtractor()
+        with pytest.raises(FileNotFoundError):
+            extractor.extract('/nonexistent/file.pdf', 1)
+
+    def test_extract_without_table_areas_returns_empty(self, simple_table_pdf):
+        # Given: an extractor and no table_areas
+        extractor = DoclingExtractor()
+
+        # When: extracting without table_areas
+        results = extractor.extract(simple_table_pdf, 1, table_areas=None)
+
+        # Then: returns empty list (pipeline requires table_areas)
+        assert results == []
+
+    def test_extract_invalid_page_raises_error(self, simple_table_pdf):
+        # Given: an extractor and an out-of-range page
+        extractor = DoclingExtractor()
+        table_areas = [(100.0, 500.0, 460.0, 700.0)]
+
+        # When/Then: ValueError is raised before any model work
+        with pytest.raises(ValueError, match="out of range"):
+            extractor.extract(simple_table_pdf, 999, table_areas=table_areas)
+
+    def test_extract_page_zero_raises_error(self, simple_table_pdf):
+        # Given: an extractor and page 0 (1-indexed)
+        extractor = DoclingExtractor()
+        table_areas = [(100.0, 500.0, 460.0, 700.0)]
+
+        # When/Then: ValueError is raised
+        with pytest.raises(ValueError, match="out of range"):
+            extractor.extract(simple_table_pdf, 0, table_areas=table_areas)
+
+    def test_extract_returns_list(self, simple_table_pdf):
+        # Integration: requires docling installed
+        pytest.importorskip("docling")
+        extractor = DoclingExtractor()
+        table_areas = [(100.0, 500.0, 460.0, 700.0)]
+
+        results = extractor.extract(simple_table_pdf, 1, table_areas=table_areas)
+
+        assert isinstance(results, list)
+
+    def test_extract_results_are_extraction_results(self, simple_table_pdf):
+        # Integration: requires docling installed
+        pytest.importorskip("docling")
+        extractor = DoclingExtractor()
+        table_areas = [(100.0, 500.0, 460.0, 700.0)]
+
+        results = extractor.extract(simple_table_pdf, 1, table_areas=table_areas)
+
+        for result in results:
+            assert isinstance(result, ExtractionResult)
+            assert result.method == 'docling'
+
+
+class TestDoclingExtractorValidation:
+    """Tests for DoclingExtractor validation/cleaning helpers."""
+
+    def test_valid_table_requires_minimum_dimensions(self):
+        extractor = DoclingExtractor()
+
+        valid_df = pd.DataFrame([['a', 'b'], ['c', 'd']])
+        assert extractor._is_valid_table(valid_df) is True
+
+        invalid_df = pd.DataFrame([['a', 'b']])
+        assert extractor._is_valid_table(invalid_df) is False
+
+    def test_clean_dataframe_replaces_none(self):
+        extractor = DoclingExtractor()
+        df = pd.DataFrame({'A': [1, None, 3], 'B': [None, 2, None]})
+
+        cleaned = extractor._clean_dataframe(df)
+
+        assert not cleaned.isna().any().any()
+
+    def test_clean_dataframe_pushes_multiindex_header_to_row0(self):
+        # Given: a DataFrame with spanning (MultiIndex) headers like Docling
+        # produces for complex tables
+        extractor = DoclingExtractor()
+        cols = pd.MultiIndex.from_tuples([('Group', 'a'), ('Group', 'b')])
+        df = pd.DataFrame([[1, 2], [3, 4]], columns=cols)
+
+        # When: cleaning
+        cleaned = extractor._clean_dataframe(df)
+
+        # Then: no MultiIndex; the collapsed header becomes data row 0 with a
+        # positional RangeIndex (matching Docling's simple-table shape and the
+        # other text backends, so XLSX export / scorer header detection work)
+        assert not isinstance(cleaned.columns, pd.MultiIndex)
+        assert list(cleaned.columns) == [0, 1]
+        assert list(cleaned.iloc[0]) == ['Group a', 'Group b']
+        assert list(cleaned.iloc[1]) == ['1', '2']
+
+    def test_duplicate_spanning_headers_do_not_crash_scoring(self):
+        # Regression: spanning headers can collapse to duplicate labels. With
+        # duplicate column labels, df[col] returns a DataFrame and confidence
+        # scoring used to raise -> _process_table swallowed it -> the table was
+        # silently dropped. The header must instead land in row 0 (dupes allowed
+        # as plain cells) and scoring must not crash.
+        extractor = DoclingExtractor()
+        cols = pd.MultiIndex.from_tuples([('Amount', ''), ('Amount', ''), ('Year', '2023')])
+        df = pd.DataFrame([['10', '20', '2023'], ['30', '40', '2024']], columns=cols)
+
+        cleaned = extractor._clean_dataframe(df)
+        assert list(cleaned.iloc[0]) == ['Amount', 'Amount', 'Year 2023']
+
+        # Confidence scoring runs without raising and returns a valid score
+        confidence = extractor._calculate_confidence(cleaned)
+        assert isinstance(confidence, float)
+        assert 0.0 <= confidence <= 1.0
+
+    def test_has_numeric_content_detects_digits(self):
+        extractor = DoclingExtractor()
+
+        assert extractor._has_numeric_content('123') is True
+        assert extractor._has_numeric_content('$45.67') is True
+        assert extractor._has_numeric_content('no numbers') is False
+        assert extractor._has_numeric_content('') is False
+
+
+class TestDoclingExtractorConfidence:
+    """Tests for DoclingExtractor confidence calculation."""
+
+    def test_empty_dataframe_returns_zero_confidence(self):
+        extractor = DoclingExtractor()
+        assert extractor._calculate_confidence(pd.DataFrame()) == 0.0
+
+    def test_confidence_returns_float_in_range(self):
+        extractor = DoclingExtractor()
+        df = pd.DataFrame([
+            ['Name', 'Value', 'Status'],
+            ['Item A', '100', 'Active'],
+            ['Item B', '200', 'Pending'],
+        ])
+
+        confidence = extractor._calculate_confidence(df)
+
+        assert isinstance(confidence, float)
+        assert 0.0 <= confidence <= 1.0
+
+
+class TestDoclingExtractorMetadata:
+    """Tests for DoclingExtractor metadata construction."""
+
+    def test_build_metadata_structure(self):
+        extractor = DoclingExtractor()
+        df = pd.DataFrame([['a', 'b'], ['c', 'd']])
+
+        metadata = extractor._build_metadata(
+            df, table_index=5, page_num=2, original_bbox=(10, 20, 110, 220)
+        )
+
+        assert metadata['table_index'] == 5
+        assert metadata['page_num'] == 2
+        assert metadata['bounding_box'] == {'x1': 10, 'y1': 20, 'x2': 110, 'y2': 220}
+        assert metadata['extractor_settings']['table_mode'] == 'accurate'
+        assert metadata['extractor_settings']['do_ocr'] is False
+        assert metadata['table_dimensions'] == {'rows': 2, 'cols': 2}
+
+
+class TestDoclingTableToDataframe:
+    """Tests for the _table_to_dataframe API-compatibility helper."""
+
+    def test_prefers_doc_keyword_signature(self):
+        from api.scripts.extractors.docling_extractor import _table_to_dataframe
+
+        class NewApiTable:
+            def export_to_dataframe(self, doc=None):
+                assert doc is not None
+                return pd.DataFrame([['a', 'b'], ['c', 'd']])
+
+        result = _table_to_dataframe(NewApiTable(), document=object())
+        assert result is not None
+        assert list(result.iloc[0]) == ['a', 'b']
+
+    def test_falls_back_to_no_argument_signature(self):
+        from api.scripts.extractors.docling_extractor import _table_to_dataframe
+
+        class OldApiTable:
+            def export_to_dataframe(self):
+                return pd.DataFrame([['x', 'y'], ['z', 'w']])
+
+        result = _table_to_dataframe(OldApiTable(), document=object())
+        assert result is not None
+        assert list(result.iloc[0]) == ['x', 'y']
+
+    def test_returns_none_on_failure(self):
+        from api.scripts.extractors.docling_extractor import _table_to_dataframe
+
+        class BrokenTable:
+            def export_to_dataframe(self, doc=None):
+                raise RuntimeError("boom")
+
+        assert _table_to_dataframe(BrokenTable(), document=object()) is None
