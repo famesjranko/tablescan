@@ -57,7 +57,7 @@ from PyPDF2 import PdfWriter, PdfReader
 from pdf2image import convert_from_path, convert_from_bytes
 from api.scripts.YOLOV3.utils.detect_func import detectTable, parameters
 from api.scripts.table_detector import detect_table_type_from_array
-from api.scripts.header_processor import process_table_headers, strip_empty_rows_and_cols
+from api.scripts.header_processor import process_table_headers, strip_empty_rows_and_cols, uniquify_column_names
 from api.scripts.extractors import MultiExtractor, VisionExtractor, ExtractionScorer
 from api.scripts.extractors.base import ExtractionResult
 from api.scripts.xlsx_exporter import export_to_xlsx, build_xlsx_structure_from_extraction
@@ -410,7 +410,9 @@ def detect_tables(file_path, page_number, output_type, report_db, extract_dir,
             if key == "csv":
                 table.to_csv(str(e_path), index=False)
             elif key == "json":
-                json_output = json_lib.loads(table.to_json(orient="columns"))
+                # orient='columns' needs unique labels; multi-row header merges
+                # can repeat them (e.g. two 'Total' sub-columns). See #16 review.
+                json_output = json_lib.loads(uniquify_column_names(table).to_json(orient="columns"))
                 json_output['_extraction_metadata'] = {
                     'method': best_variant['method'],
                     'page_num': pg,
@@ -848,7 +850,9 @@ def save_extraction_results(results: List[ExtractionResult], file_path: str,
                 db.to_csv(str(e_path), index=False)
             elif key == "json":
                 # Include extraction method in JSON output (backwards compatible - additive)
-                json_str = db.to_json(orient="columns")
+                # orient='columns' needs unique labels; multi-row header merges
+                # can repeat them (e.g. two 'Total' sub-columns). See #16 review.
+                json_str = uniquify_column_names(db).to_json(orient="columns")
                 json_output = json_lib.loads(json_str)
 
                 # Add extraction metadata (additive - backwards compatible)

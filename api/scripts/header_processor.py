@@ -334,6 +334,42 @@ def clean_column_names(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def uniquify_column_names(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Return a copy of ``df`` whose column labels are made unique by suffixing
+    duplicates as ``name``, ``name.1``, ``name.2``, ...
+
+    Multi-row header merging (:func:`merge_header_rows_hierarchical`) can
+    legitimately produce repeated labels — e.g. two ``"Region > Total"``
+    sub-columns. These render fine in CSV/XLSX (positional) but
+    ``DataFrame.to_json(orient="columns")`` requires unique labels (it builds a
+    ``{column: {row: value}}`` dict) and raises ``ValueError`` otherwise. Call
+    this immediately before such a JSON export.
+
+    Columns that are already unique are returned unchanged (the same object, no
+    copy). The suffixing loop is collision-safe even when a synthesized name
+    (e.g. ``"Total.1"``) already exists among the original labels.
+    """
+    cols = [str(c) for c in df.columns]
+    if len(set(cols)) == len(cols):
+        return df
+
+    used = set()
+    unique = []
+    for col in cols:
+        candidate = col
+        suffix = 0
+        while candidate in used:
+            suffix += 1
+            candidate = f"{col}.{suffix}"
+        used.add(candidate)
+        unique.append(candidate)
+
+    out = df.copy()
+    out.columns = unique
+    return out
+
+
 def process_table_headers(df: pd.DataFrame, merge_headers: bool = True,
                           max_header_rows: int = 4) -> tuple:
     """
