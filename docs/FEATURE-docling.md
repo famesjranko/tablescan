@@ -60,6 +60,15 @@ book-viewer frontend.
   `DOCLING_ARTIFACTS_PATH` and passes it as `artifacts_path` for offline load.
 - **torch/transformers.** Docling builds on the existing CPU-only torch already
   installed in the image; `requirements.txt` pins `docling>=2.0.0,<3.0.0`.
+- **Confidence is a structural heuristic, not the model probability.** Like the
+  PyMuPDF backend, `DoclingExtractor` computes `confidence` from fill rate /
+  numeric content / size — *not* TableFormer's internal probability or the
+  "97.9%" benchmark figure. This is intentional: `confidence` feeds
+  `ExtractionScorer` (weighted ~0.35), so it must be on the same scale as the
+  other backends to keep the comparison fair. The user-facing ranking is the
+  scorer's **score** (uniform across backends), shown as the badge in the
+  switch-method UI. Surfacing the model's own confidence would be a separate,
+  display-only metadata field — not a change to this one.
 
 ---
 

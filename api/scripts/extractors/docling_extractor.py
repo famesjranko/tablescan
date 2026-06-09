@@ -452,6 +452,14 @@ class DoclingExtractor(BaseExtractor):
         Docling's TableFormer is strong, so this leans on structural signals:
         cell fill rate, numeric content presence, and a size bonus.
 
+        Note: this is a structural heuristic (same style as PyMuPDFExtractor),
+        deliberately NOT TableFormer's internal model probability. It is kept
+        consistent with the other backends because confidence feeds
+        ExtractionScorer (weighted ~0.35); using the model's own probability
+        here would put Docling on a different scale and skew the cross-backend
+        comparison. If the model's confidence is ever wanted, surface it as a
+        separate display-only metadata field rather than overloading this one.
+
         Args:
             df: Cleaned DataFrame.
 
