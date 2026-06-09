@@ -6,6 +6,7 @@ Tests will be skipped if poppler is not installed.
 """
 import os
 import shutil
+import tempfile
 import unittest
 import django
 
@@ -34,17 +35,59 @@ class DetectTableRegionsTests(TestCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        # Use the test PDF in documents directory
-        cls.test_pdf_path = str(
-            Path(__file__).parent.parent.parent / "documents" / "test_report" / "test_report.pdf"
-        )
-        # Import here to avoid import errors when dependencies missing
         cls.detect_table_regions = None
+        cls.test_pdf_path = None
+        cls._tmp_dir = None
+
+        # Import here to avoid import errors when dependencies missing.
+        # Store as a staticmethod: a plain function assigned to a class
+        # attribute would otherwise bind `self` when called via the instance,
+        # so `self.detect_table_regions(path, 1)` would pass 3 args to a 2-arg
+        # function.
         try:
             from api.scripts.YOLOV3.predict_table import detect_table_regions
-            cls.detect_table_regions = detect_table_regions
+            cls.detect_table_regions = staticmethod(detect_table_regions)
         except ImportError:
-            pass
+            return
+
+        # Generate a small self-contained PDF. (The previously referenced
+        # documents/test_report/test_report.pdf is an upload-dir artifact that
+        # is not committed, so the tests can't rely on it being present.)
+        try:
+            import fitz
+            cls._tmp_dir = tempfile.mkdtemp(prefix="detect_regions_")
+            cls.test_pdf_path = os.path.join(cls._tmp_dir, "test_report.pdf")
+            doc = fitz.open()
+            page = doc.new_page(width=612, height=792)
+            shape = page.new_shape()
+            x0, y0, cw, ch, rows, cols = 100, 200, 120, 30, 4, 3
+            for i in range(rows + 1):
+                y = y0 + i * ch
+                shape.draw_line(fitz.Point(x0, y), fitz.Point(x0 + cols * cw, y))
+            for j in range(cols + 1):
+                x = x0 + j * cw
+                shape.draw_line(fitz.Point(x, y0), fitz.Point(x, y0 + rows * ch))
+            shape.finish(color=(0, 0, 0), width=0.5)
+            shape.commit()
+            for i in range(rows):
+                for j in range(cols):
+                    page.insert_text(
+                        fitz.Point(x0 + j * cw + 8, y0 + i * ch + 20),
+                        f"r{i}c{j}", fontsize=10,
+                    )
+            doc.save(cls.test_pdf_path)
+            doc.close()
+        except Exception:
+            # If the fixture can't be built, fall back to skipping (existing
+            # guards check detect_table_regions is None).
+            cls.test_pdf_path = None
+            cls.detect_table_regions = None
+
+    @classmethod
+    def tearDownClass(cls):
+        if cls._tmp_dir and os.path.isdir(cls._tmp_dir):
+            shutil.rmtree(cls._tmp_dir, ignore_errors=True)
+        super().tearDownClass()
 
     @requires_poppler
     def test_detect_table_regions_returns_list(self):
@@ -119,19 +162,24 @@ class DetectTableRegionsTests(TestCase):
 
     @requires_poppler
     def test_detect_table_regions_coordinates_valid_bounds(self):
-        """Coordinates should form valid bounding boxes (x1 < x2, y2 < y1 in PDF space)."""
+        """Coordinates should form valid bounding boxes.
+
+        detect_table_regions returns image/top-left-origin percentage coords
+        (0-100), so a valid box has x1 < x2 (left < right) and y1 < y2
+        (top < bottom). (The older assertion here assumed PDF bottom-left
+        coords with a Y-flip, which this function does not use.)
+        """
         if self.detect_table_regions is None:
             self.skipTest("Could not import detect_table_regions")
         result = self.detect_table_regions(self.test_pdf_path, 1)
 
         for region in result:
-            # In PDF coordinates, x1 should be less than x2
-            self.assertLess(region['x1'], region['x2'], "x1 should be less than x2")
-            # In PDF coordinates with bottom-left origin and Y-flip,
-            # y1 (top in image) becomes larger y in PDF space,
-            # y2 (bottom in image) becomes smaller y in PDF space
-            # So y1 > y2 after the Y-flip
-            self.assertGreater(region['y1'], region['y2'], "y1 should be greater than y2 in PDF space")
+            self.assertLess(region['x1'], region['x2'], "x1 (left) should be less than x2 (right)")
+            self.assertLess(region['y1'], region['y2'], "y1 (top) should be less than y2 (bottom) in top-left coords")
+            # Percentage coordinates stay within the page (0-100)
+            for key in ('x1', 'y1', 'x2', 'y2'):
+                self.assertGreaterEqual(region[key], 0, f"{key} should be >= 0")
+                self.assertLessEqual(region[key], 100, f"{key} should be <= 100")
 
     @requires_poppler
     def test_detect_table_regions_coordinates_non_negative(self):

@@ -41,6 +41,12 @@ class TestRoutingCodeStructure:
         """Verify predict_table.py defines extract_tables_direct function."""
         assert "def extract_tables_direct(" in predict_table_source
 
+    @pytest.mark.skip(reason="Obsolete: routing refactored from page-classification "
+                             "branching to a YOLO-first multi-extractor flow "
+                             "(process_page_with_routing always runs YOLO + threads "
+                             "enabled_libraries; classification.type no longer gates "
+                             "routing). Current routing is covered by the other "
+                             "TestRoutingCodeStructure tests.")
     def test_routing_function_checks_born_digital(self, table_extract_source):
         """Verify routing function checks for born_digital page type."""
         assert "classification.type == 'born_digital'" in table_extract_source
@@ -55,6 +61,9 @@ class TestRoutingCodeStructure:
         # Check that detect_tables is called in else branch (via lazy loader)
         assert "yolo['detect_tables']" in table_extract_source or "detect_tables(" in table_extract_source
 
+    @pytest.mark.skip(reason="Obsolete: routing no longer branches on "
+                             "classification.type (YOLO-first multi-extractor flow). "
+                             "See test_routing_function_checks_born_digital.")
     def test_routing_function_logs_page_type(self, table_extract_source):
         """Verify page type is logged during processing."""
         # Check for logging of classification type
@@ -169,10 +178,18 @@ class TestVisionRoutingCodeStructure:
         assert "FEATURE_FLAGS" in table_extract_source
         assert "use_vision_detector" in table_extract_source
 
+    @pytest.mark.skip(reason="Obsolete: routing refactored to YOLO-first "
+                             "multi-extractor; vision is now an enabled_libraries "
+                             "toggle, not a classification.type == 'scanned' route. "
+                             "See test_routing_function_checks_born_digital.")
     def test_routing_function_checks_scanned(self, table_extract_source):
         """Verify routing function checks for scanned page type."""
         assert "classification.type == 'scanned'" in table_extract_source
 
+    @pytest.mark.skip(reason="Obsolete: routing refactored to YOLO-first "
+                             "multi-extractor; there is no distinct 'mixed' "
+                             "classification route any more. "
+                             "See test_routing_function_checks_born_digital.")
     def test_routing_function_checks_mixed(self, table_extract_source):
         """Verify routing function handles mixed page type."""
         # Mixed pages should have a distinct handling path
