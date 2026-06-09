@@ -39,6 +39,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Migration drift: recorded the `"auto"` choice on `TableSelection.source` that was added to the model without a migration (`0012_alter_tableselection_source`), so `makemigrations --check` passes clean
 - Detection boxes now clip to page boundaries
 - Race condition in render timing for PDF pages resolved
 
