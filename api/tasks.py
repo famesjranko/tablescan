@@ -53,9 +53,11 @@ def _deserialize_variants_from_cache(data: str) -> list:
     - Duplicate column labels get a ``.1`` suffix ('Total','Total' ->
       'Total','Total.1').
 
-    Each extractor's ``_clean_dataframe`` stringifies cells before they are
+    Extractor outputs are already string-typed and ``fillna``'d before they are
     cached, so forcing ``str`` on the way back reproduces exactly what was
-    extracted instead of re-introducing numeric types.
+    extracted instead of re-introducing numeric types. Assumes single-level row
+    and column axes (true for every extractor output); MultiIndex axes are not
+    produced in this pipeline and are not handled by this reconstruction.
     """
     variants = json.loads(data)
     for v in variants:
