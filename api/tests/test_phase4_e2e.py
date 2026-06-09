@@ -198,6 +198,20 @@ class TestMetadataFieldsPopulated:
         """detect_tables should populate bounding_box field."""
         assert "bounding_box=" in predict_table_source
 
+    def test_bounding_box_help_text_uses_canonical_shape(self, model_source):
+        """Regression for issue #17: help_text must document the canonical
+        {x1, y1, x2, y2} shape that every extractor backend (and the normalized
+        YOLO/auto path) actually stores."""
+        assert "{x1, y1, x2, y2}" in model_source
+        assert "{x0, y0, x1, y1}" not in model_source
+
+    def test_detect_tables_builds_canonical_bbox_shape(self, predict_table_source):
+        """Regression for issue #17: the YOLO/auto path must build bounding boxes
+        with the canonical {x1, y1, x2, y2} keys, not the legacy {x0, y0, ...}."""
+        assert "{'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2}" in predict_table_source
+        assert "'x0'" not in predict_table_source
+        assert "'y0'" not in predict_table_source
+
     def test_extract_tables_direct_populates_all_fields(self, predict_table_source):
         """extract_tables_direct should populate all rich fields.
 

@@ -295,7 +295,9 @@ def detect_tables(file_path, page_number, output_type, report_db, extract_dir,
         if len(coords) == 4:
             x1, y1, x2, y2 = float(coords[0]), float(coords[1]), float(coords[2]), float(coords[3])
             table_areas.append((x1, y1, x2, y2))
-            bounding_boxes.append({'x0': x1, 'y0': y1, 'x1': x2, 'y1': y2})
+            # Canonical bbox shape: {x1, y1, x2, y2}, matching every BaseExtractor
+            # backend's metadata['bounding_box'] and Extracted.bounding_box (issue #17).
+            bounding_boxes.append({'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2})
 
     if not table_areas:
         log.output('INFO', f'Page {pg}: No table areas detected by YOLO')
@@ -362,11 +364,11 @@ def detect_tables(file_path, page_number, output_type, report_db, extract_dir,
         page_height = pdf_page.mediabox.height
 
         # Convert PDF coords to percentage (0-100) for TableSelection
-        x1_pct = (bbox['x0'] / float(page_width)) * 100
-        x2_pct = (bbox['x1'] / float(page_width)) * 100
+        x1_pct = (bbox['x1'] / float(page_width)) * 100
+        x2_pct = (bbox['x2'] / float(page_width)) * 100
         # Y-flip: PDF origin is bottom-left, canvas is top-left
-        y1_pct = (1 - bbox['y1'] / float(page_height)) * 100
-        y2_pct = (1 - bbox['y0'] / float(page_height)) * 100
+        y1_pct = (1 - bbox['y2'] / float(page_height)) * 100
+        y2_pct = (1 - bbox['y1'] / float(page_height)) * 100
         # Ensure valid box: y1 < y2 (top < bottom in screen coords)
         if y1_pct > y2_pct:
             y1_pct, y2_pct = y2_pct, y1_pct
