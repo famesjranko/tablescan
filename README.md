@@ -55,7 +55,7 @@ Browser ──► Django ──► Celery Worker
          PostgreSQL    Redis (broker)
 ```
 
-**Stack**: Django 4.2 / htmx / Tailwind CSS / Celery / Redis / PostgreSQL / YOLOv3 / Camelot / pdfplumber / PyMuPDF / img2table
+**Stack**: Django 4.2 / htmx / Tailwind CSS / Celery / Redis / PostgreSQL / YOLOv3 / Camelot / pdfplumber / PyMuPDF / img2table / Docling
 
 ### Extraction Libraries
 
@@ -67,8 +67,9 @@ The multi-extractor pipeline runs multiple extraction backends and selects the b
 | **pdfplumber** | lines, text | Born-digital PDFs with clear structure |
 | **PyMuPDF** | lines, text | Alternative algorithm, different edge cases |
 | **img2table** | vision | OCR-based extraction for scanned documents |
+| **Docling** (IBM) | TableFormer | Complex tables; highest accuracy, opt-in (heavier model) |
 
-Users can enable/disable libraries via checkboxes in the upload form (Advanced Extraction Options).
+Users can enable/disable libraries via checkboxes in the upload form (Advanced Extraction Options). Docling is **opt-in** (off by default) — its model weights are pre-baked into the Docker image at build time, and it appears as a scored, selectable variant just like the other backends. See [`docs/FEATURE-docling.md`](docs/FEATURE-docling.md).
 
 ## Usage
 
@@ -107,7 +108,7 @@ Users can enable/disable libraries via checkboxes in the upload form (Advanced E
 │   ├── tasks.py       # Celery extraction tasks
 │   ├── models.py      # Report, Extracted, TableSelection
 │   └── scripts/       # YOLO detection + multi-extractor pipeline
-│       └── extractors/  # Camelot, pdfplumber, PyMuPDF, vision backends
+│       └── extractors/  # Camelot, pdfplumber, PyMuPDF, vision, Docling backends
 ├── templates/         # htmx/Tailwind frontend
 ├── tablescan/         # Django settings + Celery config
 ├── Makefile           # Development commands

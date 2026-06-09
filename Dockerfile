@@ -34,6 +34,14 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu && \
     pip install -r requirements.txt
 
+# Pre-download Docling model weights at build time so the first extraction
+# does not trigger a multi-hundred-MB cold-start download at runtime.
+# DOCLING_ARTIFACTS_PATH points DoclingExtractor at these pre-baked weights
+# (see api/scripts/extractors/docling_extractor.py).
+ENV DOCLING_ARTIFACTS_PATH=/opt/docling-models
+RUN --mount=type=cache,target=/root/.cache/pip \
+    docling-tools models download -o /opt/docling-models
+
 # Copy project files
 COPY . .
 

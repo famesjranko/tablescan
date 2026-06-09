@@ -819,12 +819,14 @@ class UploadAsyncView(LoginRequiredMixin, View):
         merge_headers = request.POST.get('merge_headers', 'on') == 'on'
         extraction_mode = request.POST.get('extraction_mode', 'auto')
 
-        # Get library toggles (all enabled by default)
+        # Get library toggles (classic backends enabled by default;
+        # docling is opt-in and defaults to off)
         enabled_libraries = {
             'camelot': request.POST.get('use_camelot', 'on') == 'on',
             'pdfplumber': request.POST.get('use_pdfplumber', 'on') == 'on',
             'pymupdf': request.POST.get('use_pymupdf', 'on') == 'on',
             'vision': request.POST.get('use_vision', 'on') == 'on',
+            'docling': request.POST.get('use_docling', 'off') == 'on',
         }
 
         # Create report using serializer

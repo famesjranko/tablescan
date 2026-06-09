@@ -600,7 +600,7 @@ def extract(file_path: str, start_page: int, end_page: int,
 
     # Default enabled_libraries if not provided
     if enabled_libraries is None:
-        enabled_libraries = {'camelot': True, 'pdfplumber': True, 'pymupdf': True, 'vision': True}
+        enabled_libraries = {'camelot': True, 'pdfplumber': True, 'pymupdf': True, 'vision': True, 'docling': False}
 
     # get report database object
     file_name = Path(file_path).name

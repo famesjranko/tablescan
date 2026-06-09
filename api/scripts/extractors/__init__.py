@@ -9,6 +9,7 @@ from .camelot_extractor import CamelotExtractor
 from .pdfplumber_extractor import PdfplumberExtractor
 from .pymupdf_extractor import PyMuPDFExtractor
 from .vision_extractor import VisionExtractor
+from .docling_extractor import DoclingExtractor
 from .scorer import ExtractionScorer
 from .multi_extractor import MultiExtractor
 
@@ -20,6 +21,7 @@ __all__ = [
     'PdfplumberExtractor',
     'PyMuPDFExtractor',
     'VisionExtractor',
+    'DoclingExtractor',
     'ExtractionScorer',
     'MultiExtractor',
 ]

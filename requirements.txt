@@ -27,6 +27,11 @@ img2table>=1.2.0
 torch>=2.0.0
 torchvision>=0.15.0
 
+# PDF processing - Docling (IBM) table extraction backend (opt-in)
+# Built on torch + TableFormer; model weights are pre-baked at Docker build
+# time (see Dockerfile) to avoid a multi-hundred-MB cold-start download.
+docling>=2.0.0,<3.0.0
+
 # Data processing
 pandas>=2.0.0
 numpy>=1.24.0
