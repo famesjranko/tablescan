@@ -853,6 +853,10 @@ class UploadAsyncView(LoginRequiredMixin, View):
         report.name = Path(file_name).stem
         report.f_type = Path(file_name).suffix.lstrip('.')
         report.extraction_mode = extraction_mode
+        # Persist library toggles so review/manual extraction (which happens
+        # later, after the user approves selections) honors the same choices
+        # as auto mode - e.g. the opt-in Docling backend.
+        report.enabled_libraries = enabled_libraries
 
         # Get total page count for proper multi-page handling
         try:

@@ -433,6 +433,21 @@ class DoclingExtractor(BaseExtractor):
             Cleaned DataFrame.
         """
         df = df.copy()
+
+        # Docling can emit MultiIndex columns for tables with spanning/multi-row
+        # headers. Flatten them to single string labels so the result matches
+        # the other backends and round-trips cleanly through the variants cache
+        # (which serializes via DataFrame.to_json(orient='split')).
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = [
+                ' '.join(
+                    str(level).strip()
+                    for level in col
+                    if str(level).strip() not in ('', 'nan', 'None')
+                ).strip()
+                for col in df.columns
+            ]
+
         df = df.fillna('')
         df = df.map(lambda x: str(x).strip() if x is not None else '')
         df = df.reset_index(drop=True)

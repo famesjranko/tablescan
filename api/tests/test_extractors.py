@@ -1835,6 +1835,21 @@ class TestDoclingExtractorValidation:
 
         assert not cleaned.isna().any().any()
 
+    def test_clean_dataframe_flattens_multiindex_columns(self):
+        # Given: a DataFrame with spanning (MultiIndex) headers like Docling
+        # produces for complex tables
+        extractor = DoclingExtractor()
+        cols = pd.MultiIndex.from_tuples([('Group', 'a'), ('Group', 'b')])
+        df = pd.DataFrame([[1, 2], [3, 4]], columns=cols)
+
+        # When: cleaning
+        cleaned = extractor._clean_dataframe(df)
+
+        # Then: columns are flattened to single string labels (round-trips
+        # through the variants cache's to_json/read_json)
+        assert not isinstance(cleaned.columns, pd.MultiIndex)
+        assert list(cleaned.columns) == ['Group a', 'Group b']
+
     def test_has_numeric_content_detects_digits(self):
         extractor = DoclingExtractor()
 

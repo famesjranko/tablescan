@@ -76,6 +76,14 @@ Docling is **off by default** (unlike the other backends, which default on):
 
 Enabling it adds a single `DoclingExtractor()` (name `docling`) to the pipeline.
 
+**All extraction modes honor the toggle.** The chosen `enabled_libraries` are
+persisted on `Report.enabled_libraries` (JSONField) at upload time, so the
+**review** and **manual** flows — where extraction happens later via
+`extract_from_selections` after the user approves selections — read the same
+choices instead of silently falling back to defaults. (Older reports with no
+stored value fall back to defaults.) Docling then appears as a scored, selectable
+variant in the book viewer's switch-method UI in every mode.
+
 ---
 
 ## Testing

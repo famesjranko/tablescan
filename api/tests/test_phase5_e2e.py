@@ -314,6 +314,10 @@ class TestExtractionFromSelections:
         """extract_from_selections should use extract_from_manual_areas for user-specified regions."""
         assert "extract_from_manual_areas" in tasks_source
 
+    def test_task_honors_report_enabled_libraries(self, tasks_source):
+        """Selection extraction should respect per-report library toggles (incl. opt-in Docling)."""
+        assert "MultiExtractor(enabled_libraries=report.enabled_libraries" in tasks_source
+
     def test_task_groups_by_page(self, tasks_source):
         """Task should group selections by page_num."""
         assert "page_num" in tasks_source

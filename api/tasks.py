@@ -425,8 +425,10 @@ def extract_from_selections(self, report_id):
         for sel in approved_selections:
             selection_ids_by_page[sel.page_num].append(sel.id)
 
-        # Initialize multi-extractor for running all methods
-        multi_extractor = MultiExtractor()
+        # Initialize multi-extractor for running all methods, honoring the
+        # per-report library toggles captured at upload time (falls back to
+        # defaults for older reports where none were stored).
+        multi_extractor = MultiExtractor(enabled_libraries=report.enabled_libraries or None)
         cache_ttl = getattr(settings, 'EXTRACTION_VARIANTS_CACHE_TTL', 600)
 
         # Process each selection individually (not grouped by page)

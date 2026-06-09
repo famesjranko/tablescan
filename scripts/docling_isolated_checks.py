@@ -135,6 +135,12 @@ def test_clean_dataframe_replaces_none():
     cleaned = DoclingExtractor()._clean_dataframe(pd.DataFrame({'A': [1, None], 'B': [None, 2]}))
     assert not cleaned.isna().any().any()
 
+def test_clean_dataframe_flattens_multiindex_columns():
+    cols = pd.MultiIndex.from_tuples([('Group', 'a'), ('Group', 'b')])
+    cleaned = DoclingExtractor()._clean_dataframe(pd.DataFrame([[1, 2], [3, 4]], columns=cols))
+    assert not isinstance(cleaned.columns, pd.MultiIndex)
+    assert list(cleaned.columns) == ['Group a', 'Group b']
+
 def test_has_numeric_content():
     ext = DoclingExtractor()
     assert ext._has_numeric_content('123') is True
