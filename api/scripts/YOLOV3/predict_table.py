@@ -57,7 +57,7 @@ from PyPDF2 import PdfWriter, PdfReader
 from pdf2image import convert_from_path, convert_from_bytes
 from api.scripts.YOLOV3.utils.detect_func import detectTable, parameters
 from api.scripts.table_detector import detect_table_type_from_array
-from api.scripts.header_processor import process_table_headers, strip_empty_rows_and_cols
+from api.scripts.header_processor import process_table_headers, strip_empty_rows_and_cols, uniquify_column_names
 from api.scripts.extractors import MultiExtractor, VisionExtractor, ExtractionScorer
 from api.scripts.extractors.base import ExtractionResult
 from api.scripts.xlsx_exporter import export_to_xlsx, build_xlsx_structure_from_extraction
@@ -295,7 +295,9 @@ def detect_tables(file_path, page_number, output_type, report_db, extract_dir,
         if len(coords) == 4:
             x1, y1, x2, y2 = float(coords[0]), float(coords[1]), float(coords[2]), float(coords[3])
             table_areas.append((x1, y1, x2, y2))
-            bounding_boxes.append({'x0': x1, 'y0': y1, 'x1': x2, 'y1': y2})
+            # Canonical bbox shape: {x1, y1, x2, y2}, matching every BaseExtractor
+            # backend's metadata['bounding_box'] and Extracted.bounding_box (issue #17).
+            bounding_boxes.append({'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2})
 
     if not table_areas:
         log.output('INFO', f'Page {pg}: No table areas detected by YOLO')
@@ -362,11 +364,11 @@ def detect_tables(file_path, page_number, output_type, report_db, extract_dir,
         page_height = pdf_page.mediabox.height
 
         # Convert PDF coords to percentage (0-100) for TableSelection
-        x1_pct = (bbox['x0'] / float(page_width)) * 100
-        x2_pct = (bbox['x1'] / float(page_width)) * 100
+        x1_pct = (bbox['x1'] / float(page_width)) * 100
+        x2_pct = (bbox['x2'] / float(page_width)) * 100
         # Y-flip: PDF origin is bottom-left, canvas is top-left
-        y1_pct = (1 - bbox['y1'] / float(page_height)) * 100
-        y2_pct = (1 - bbox['y0'] / float(page_height)) * 100
+        y1_pct = (1 - bbox['y2'] / float(page_height)) * 100
+        y2_pct = (1 - bbox['y1'] / float(page_height)) * 100
         # Ensure valid box: y1 < y2 (top < bottom in screen coords)
         if y1_pct > y2_pct:
             y1_pct, y2_pct = y2_pct, y1_pct
@@ -408,7 +410,9 @@ def detect_tables(file_path, page_number, output_type, report_db, extract_dir,
             if key == "csv":
                 table.to_csv(str(e_path), index=False)
             elif key == "json":
-                json_output = json_lib.loads(table.to_json(orient="columns"))
+                # orient='columns' needs unique labels; multi-row header merges
+                # can repeat them (e.g. two 'Total' sub-columns). See #16 review.
+                json_output = json_lib.loads(uniquify_column_names(table).to_json(orient="columns"))
                 json_output['_extraction_metadata'] = {
                     'method': best_variant['method'],
                     'page_num': pg,
@@ -846,7 +850,9 @@ def save_extraction_results(results: List[ExtractionResult], file_path: str,
                 db.to_csv(str(e_path), index=False)
             elif key == "json":
                 # Include extraction method in JSON output (backwards compatible - additive)
-                json_str = db.to_json(orient="columns")
+                # orient='columns' needs unique labels; multi-row header merges
+                # can repeat them (e.g. two 'Total' sub-columns). See #16 review.
+                json_str = uniquify_column_names(db).to_json(orient="columns")
                 json_output = json_lib.loads(json_str)
 
                 # Add extraction metadata (additive - backwards compatible)

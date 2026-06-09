@@ -389,6 +389,45 @@ class TestVariantsCacheSerialization:
         assert deserialized[0]['dataframe'] is None
         assert deserialized[0]['error'] == 'Extraction failed'
 
+    def test_round_trip_preserves_identifier_cell_types(self):
+        """Regression for issue #16: leading zeros and decimal formatting must
+        survive the cache round-trip (read_json would coerce '001'->1, '1.50'->1.5)."""
+        # Given: cells already stringified by an extractor's _clean_dataframe
+        df = pd.DataFrame({
+            'code': ['001', '002', '030'],
+            'price': ['1.50', '2.00', '10.00'],
+        })
+        variants = [{'method': 'camelot_lattice', 'dataframe': df}]
+
+        # When: round-tripping through the cache
+        deserialized = _deserialize_variants_from_cache(
+            _serialize_variants_for_cache(variants)
+        )
+        back = deserialized[0]['dataframe']
+
+        # Then: exact string values are preserved (no numeric coercion)
+        assert back['code'].tolist() == ['001', '002', '030']
+        assert back['price'].tolist() == ['1.50', '2.00', '10.00']
+        assert all(str(dt) == 'object' for dt in back.dtypes)
+
+    def test_round_trip_preserves_duplicate_columns(self):
+        """Regression for issue #16: duplicate column labels must not be renamed
+        (read_json would turn ['Total','Total'] into ['Total','Total.1'])."""
+        # Given: a DataFrame with duplicate column labels
+        df = pd.DataFrame([['a', 'b'], ['c', 'd']], columns=['Total', 'Total'])
+        variants = [{'method': 'pdfplumber', 'dataframe': df}]
+
+        # When: round-tripping through the cache
+        deserialized = _deserialize_variants_from_cache(
+            _serialize_variants_for_cache(variants)
+        )
+        back = deserialized[0]['dataframe']
+
+        # Then: duplicate labels survive unchanged
+        assert list(back.columns) == ['Total', 'Total']
+        assert back.shape == (2, 2)
+        assert back.values.tolist() == [['a', 'b'], ['c', 'd']]
+
 
 # =============================================================================
 # Test API Endpoints (Django TestCase)

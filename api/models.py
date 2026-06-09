@@ -186,7 +186,7 @@ class Extracted(models.Model):
     bounding_box = models.JSONField(
         null=True,
         blank=True,
-        help_text="Table location as {x0, y0, x1, y1} coordinates",
+        help_text="Table location as {x1, y1, x2, y2} coordinates",
     )
     selection = models.ForeignKey(
         'TableSelection',

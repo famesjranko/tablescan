@@ -122,19 +122,19 @@ def _normalize_bbox(bbox: dict) -> tuple:
     """
     Normalize bounding box to (x_min, y_min, x_max, y_max) format.
 
-    Handles different formats:
-    - Camelot/pdfplumber: x0, y0, x1, y1
-    - VisionExtractor: x1, y1, x2, y2
+    All extractor backends emit the canonical ``{x1, y1, x2, y2}`` shape. The
+    legacy ``{x0, y0, x1, y1}`` branch is retained defensively for any older
+    cached/stored payloads predating the issue #17 normalization.
     """
     if not bbox:
         return None
 
-    # Try x0/y0/x1/y1 format first (Camelot)
-    if 'x0' in bbox:
-        return (bbox['x0'], bbox['y0'], bbox['x1'], bbox['y1'])
-    # Try x1/y1/x2/y2 format (VisionExtractor)
-    elif 'x1' in bbox and 'x2' in bbox:
+    # Canonical shape emitted by every extractor backend.
+    if 'x1' in bbox and 'x2' in bbox:
         return (bbox['x1'], bbox['y1'], bbox['x2'], bbox['y2'])
+    # Legacy shape (defensive; no current producer emits this).
+    elif 'x0' in bbox:
+        return (bbox['x0'], bbox['y0'], bbox['x1'], bbox['y1'])
     return None
 
 
